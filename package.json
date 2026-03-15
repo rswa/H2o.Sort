@@ -1,0 +1,17 @@
+{
+  "name": "com.h2o.sort",
+  "version": "0.1.0",
+  "displayName": "H2o Sort",
+  "description": "A high-performance sorting library for Unity, supporting both CPU and GPU execution",
+  "unity": "2022.3",
+  "dependencies": {
+    "com.unity.mathematics": "1.2.6",
+    "com.unity.collections": "1.2.4"
+  },
+  "resolutionStrategy": "highestPatch",
+  "author": {
+    "name": "rswa",
+    "email": "rswa000@gmail.com",
+    "url": "https://www.unity3d.com"
+  }
+}

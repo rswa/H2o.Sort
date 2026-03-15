@@ -1,0 +1,156 @@
+#pragma kernel RadixScan
+
+#pragma target 6.0
+#pragma use_dxc 
+#pragma require wavebasic
+
+#include "../Library/RadixUtils.hlsl"
+#include "../Library/RadixInput.hlsl"
+
+static const uint GroupSize = 256;
+static const uint MinWaveSize = 4; // Defensive minimum for dynamic sub-groups (Intel/Mobile)
+static const uint MaxWaveCount = GroupSize / MinWaveSize; // Max potential waves (256/4 = 64)
+
+//uint _Pass;
+//uint _BlockCount;
+StructuredBuffer<uint> _GlobalHistogram; // prefix sum
+
+// _BlockHistogramT: Input counts to be scanned (produced by Histogram Pass)
+// Layout: [binIndex * _BlockCount + blockIndex] (Bin-Major)
+// Note: Buffer size should be aligned to GROUP_SIZE to ensure safe zero-padded reads.
+StructuredBuffer<uint> _BlockHistogramT; // count
+
+// _BlockHistogram: Output exclusive prefix sums
+// Layout: [blockIndex * RadixBinCount + binIndex] (Block-Major)
+// Purpose: Transposed storage to enable Coalesced Reads during the Reorder Pass.
+RWStructuredBuffer<uint> _BlockHistogram; // prefix sum
+
+groupshared uint gs_waveHistogram[MaxWaveCount];
+
+
+// inclusive prefix sum
+void RadixScanWaveHistogram(uint groupIndex, uint waveId, uint waveCount)
+{
+    const uint waveLaneCount = WaveGetLaneCount();
+    const uint laneIndex = WaveGetLaneIndex();
+    if (waveCount <= waveLaneCount)
+    {
+        if (groupIndex < waveCount)
+        {
+            uint count = gs_waveHistogram[groupIndex];
+            gs_waveHistogram[groupIndex] = WavePrefixSum(count) + count;
+        }
+    }
+    else
+    {
+        uint laneMask = waveLaneCount - 1;            
+        uint logWaveLaneCount = firstbitlow(waveLaneCount);
+        uint logWaveCount = firstbitlow(waveCount);
+        uint threadCount = waveCount;
+        for (uint stride = 1; stride < waveCount; stride <<= logWaveLaneCount)
+        {
+            if (groupIndex < threadCount)
+            {
+                uint index = groupIndex * stride + stride - 1;
+                uint count = gs_waveHistogram[index];
+                gs_waveHistogram[index] = WavePrefixSum(count) + count;
+            }
+            GroupMemoryBarrierWithGroupSync();
+            threadCount >>= logWaveLaneCount;
+        }
+    
+        for (uint logStride = logWaveLaneCount; logStride < logWaveCount; logStride += logWaveLaneCount)
+        {
+            uint stride = 1 << logStride;
+            uint strideMask = stride - 1;
+            uint invStrideMask = ~strideMask;
+            uint strideIndex = groupIndex >> logStride;
+            uint slotIndex = groupIndex & strideMask;
+            uint preLastSlotIndex = (groupIndex & invStrideMask) - 1;
+            
+            if ((strideIndex & laneMask) > 0 && slotIndex < strideMask)
+            {
+                gs_waveHistogram[groupIndex] += gs_waveHistogram[preLastSlotIndex];
+
+            }
+        }
+    }
+}
+[numthreads(GroupSize, 1, 1)]
+void RadixScan(uint groupIndex : SV_GroupIndex, uint3 groupId : SV_GroupID)
+{
+    // --- Execution Context ---
+    const uint waveLaneCount = WaveGetLaneCount();
+    const uint waveCount = GroupSize / waveLaneCount;
+    const uint waveId = groupIndex / waveLaneCount;
+    const uint lastWaveId = waveCount - 1;
+    const uint laneId = WaveGetLaneIndex();
+    const uint lastLaneId = waveLaneCount - 1;
+    
+    const uint binIndex = groupId.x; // Each ThreadGroup handles a single Bin across all Blocks
+        
+    // --- Serial Scan Parameters ---
+    const uint ChunkCount = CeilDiv(_RadixParams.blockCount, GroupSize);
+    const uint lastChunkIndex = ChunkCount - 1;
+    
+    uint blockIndex = groupIndex;
+    // globalPrefixSum: Running accumulator across Chunks, initialized with Bin's global starting offset
+    uint globalPrefixSum = _GlobalHistogram[RadixGetPassGlobalBinIndex(binIndex, _RadixParams.passIndex)];
+
+    // 1. Process full Chunks (Fast path without boundary checks)
+    for (uint chunkIndex = 0; chunkIndex < lastChunkIndex; ++chunkIndex)
+    {
+        uint blockCount = _BlockHistogramT[RadixHistBinBlockIndex(blockIndex, binIndex)];
+        
+        // [Stage A] Intra-Wave Scan
+        uint blockPrefixSum = WavePrefixSum(blockCount);
+        if (laneId == lastLaneId)
+        {
+            // Store wave total to shared memory
+            gs_waveHistogram[waveId] = blockPrefixSum + blockCount;
+        }
+        
+        GroupMemoryBarrierWithGroupSync();
+
+        // [Stage B] Inter-Wave Scan
+        RadixScanWaveHistogram(groupIndex, waveId, waveCount);
+        
+        GroupMemoryBarrierWithGroupSync();
+        
+        // [Stage C] Compute and Write Final Exclusive Global Prefix Sum
+        uint wavePrefixSum = (waveId > 0) ? gs_waveHistogram[waveId - 1] : 0;
+        uint totalPrefixSum = globalPrefixSum + blockPrefixSum + wavePrefixSum;
+        
+        // Transpose and store into Block-Major layout
+        _BlockHistogram[RadixHistBlockBinIndex(blockIndex, binIndex)] = totalPrefixSum;
+        
+        // [Stage D] Update Global Accumulator for next Chunk
+        globalPrefixSum += gs_waveHistogram[lastWaveId];
+        blockIndex += GroupSize;
+
+        // Synchronize to prevent Write-After-Read (WAR) race condition on LDS
+        GroupMemoryBarrierWithGroupSync();
+    }
+    
+    // 2. Final Chunk handling (Boundary check with zero-padding logic)
+    uint blockCount = (blockIndex < _RadixParams.blockCount) ? _BlockHistogramT[RadixHistBinBlockIndex(blockIndex, binIndex)] : 0;
+    
+    uint blockPrefixSum = WavePrefixSum(blockCount);
+    if (laneId == lastLaneId)
+    {
+        gs_waveHistogram[waveId] = blockPrefixSum + blockCount;
+    }
+
+    GroupMemoryBarrierWithGroupSync();
+    
+    RadixScanWaveHistogram(groupIndex, waveId, waveCount);
+   
+    GroupMemoryBarrierWithGroupSync();
+    
+    if (blockIndex < _RadixParams.blockCount)
+    {
+        uint wavePrefixSum = (waveId > 0) ? gs_waveHistogram[waveId - 1] : 0;
+        uint totalPrefixSum = globalPrefixSum + blockPrefixSum + wavePrefixSum;
+        _BlockHistogram[RadixHistBlockBinIndex(blockIndex, binIndex)] = totalPrefixSum;
+    }
+}

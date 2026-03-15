@@ -1,0 +1,279 @@
+#pragma kernel RadixReorder
+#pragma kernel RadixReorderV3
+
+
+#pragma target 6.0
+#pragma use_dxc 
+#pragma require wavebasic
+
+#include "../Library/RadixUtilsDx12.hlsl"
+#include "../Library/RadixInput.hlsl"
+
+// --- Hardware & Threading Configuration ---
+static const uint GroupSize = RadixBinCount;
+
+// --- LDS Derivation (Physical Reservation) ---
+// TODO: Implement logic for hardware WaveSize 4 and 8.
+// Current groupshared memory allocation (MaxWaveCount) is optimized for WaveSize 16.
+// Lower WaveSizes require specific code paths to stay within LDS limits.
+static const uint MinWaveLaneCount = 16;
+static const uint MaxWaveCount = GroupSize / MinWaveLaneCount; // 16 waves
+// --- Resources ---
+//uint _Pass;
+//uint _KeyCount;
+
+// _BlockHistogram: exclusive prefix sums
+// Layout: [blockIndex * RadixBinCount + binIndex] (Block-Major)
+StructuredBuffer<uint> _BlockHistogram;
+StructuredBuffer<uint> _Keys;
+StructuredBuffer<uint> _Payloads;
+RWStructuredBuffer<uint> _SortedKeys;
+RWStructuredBuffer<uint> _SortedPayloads;
+
+
+
+// LDS Flattened Array: Organized logically as [waveIndex * RadixBinCount + binIndex]
+groupshared uint gs_waveHistogram[MaxWaveCount * RadixBinCount]; // 16384 bytes = 16 * 256 * 4 = 
+
+[numthreads(GroupSize, 1, 1)]
+void RadixReorder(
+    uint3 dispatchId : SV_DispatchThreadID,
+    uint groupIndex : SV_GroupIndex,
+    uint3 groupId : SV_GroupID)
+{
+    // --- Runtime Execution Context ---
+    const uint waveLaneCount = WaveGetLaneCount();
+    const uint waveCount = GroupSize / waveLaneCount;
+    const uint waveIndex = groupIndex / waveLaneCount;
+    const uint laneId = WaveGetLaneIndex();
+    // -------------------------------------------------------------------------
+    // 1. LDS INITIALIZATION (Physical Clear)
+    // -------------------------------------------------------------------------
+    [unroll]
+    for (uint i = 0; i < MaxWaveCount; ++i)
+    {
+        if (i < waveCount)
+        {
+            gs_waveHistogram[i * RadixBinCount + groupIndex] = 0;
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    // -------------------------------------------------------------------------
+    // 2. LOCAL HISTOGRAM (Logic: Tight Bin-Major Layout)
+    // -------------------------------------------------------------------------
+    const uint binIndex = dispatchId.x < _RadixParams.keyCount ? RadixKeyToBinIndex(_Keys[dispatchId.x], _RadixParams.passIndex) : RadixBinCount;
+    const uint waveBinIndex = waveIndex * RadixBinCount + binIndex;
+    
+    uint waveBinLocalPrefixSum;
+    uint waveBinTotalCount;
+    uint4 binBallot = RadixWaveBinBallot(binIndex);
+    RadixWaveScanBits(binBallot, waveBinLocalPrefixSum, waveBinTotalCount);
+    
+    uint waveBinFirstLane = RadixWaveGetFirstLowLane(binBallot);
+    uint waveBinBase;
+    if (binIndex < RadixBinCount && waveBinFirstLane == laneId)
+    {        
+        InterlockedAdd(gs_waveHistogram[waveBinIndex], waveBinTotalCount, waveBinBase);
+    }
+    waveBinLocalPrefixSum += WaveReadLaneAt(waveBinBase, waveBinFirstLane);
+    
+    GroupMemoryBarrierWithGroupSync();
+
+    // -------------------------------------------------------------------------
+    // 3. INTER-WAVE SCAN (Exclusive Prefix Sum)
+    // -------------------------------------------------------------------------
+    uint runningSum = 0;
+    [unroll]
+    for (uint j = 0; j < MaxWaveCount; ++j)
+    {
+        if (j < waveCount)
+        {
+            // groupIndex = binIndex
+            const uint index = j * RadixBinCount + groupIndex;
+            const uint count = gs_waveHistogram[index];
+            gs_waveHistogram[index] = runningSum;
+            runningSum += count;
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+    
+    // -------------------------------------------------------------------------
+    // 4. GLOBAL SCATTER
+    // -------------------------------------------------------------------------
+    if (binIndex < RadixBinCount)
+    {
+        uint waveBinPrefixSum = gs_waveHistogram[waveBinIndex];
+        uint globalPrefixSum = _BlockHistogram[RadixHistBlockBinIndex(groupId.x, binIndex)];
+        
+        uint finalIndex = globalPrefixSum + waveBinPrefixSum + waveBinLocalPrefixSum;
+            
+        _SortedKeys[finalIndex] = _Keys[dispatchId.x];
+        _SortedPayloads[finalIndex] = _Payloads[dispatchId.x];
+    }
+}
+
+
+uint RadixWavePrefixSum(uint key, uint waveIndex)
+{
+    const uint laneId = WaveGetLaneIndex();
+    const uint binIndex = RadixKeyToBinIndex(key, _RadixParams.passIndex);
+    const uint waveHistIndex = RadixHistSubBinIndex(waveIndex, binIndex);
+    
+    uint pefixSum;
+    uint totalCount;
+    uint4 ballot = RadixWaveBinBallot(binIndex);
+    RadixWaveScanBits(ballot, pefixSum, totalCount);
+    
+    uint firstLane = RadixWaveGetFirstLowLane(ballot);
+    uint offset;
+    if (firstLane == laneId)
+    {
+        offset = gs_waveHistogram[waveHistIndex];
+        gs_waveHistogram[waveHistIndex] = offset + totalCount;
+    }
+    pefixSum += WaveReadLaneAt(offset, firstLane);
+    return pefixSum;
+}
+
+void RadixScatterResult(uint keyIndex, uint blockIndex, uint waveIndex, uint key, uint localPrefixSum)
+{                    
+    const uint binIndex = RadixKeyToBinIndex(key, _RadixParams.passIndex);
+    
+    const uint blockPrefixSum = _BlockHistogram[RadixHistBlockBinIndex(blockIndex, binIndex)];
+    const uint wavePrefixSum = gs_waveHistogram[RadixHistSubBinIndex(waveIndex, binIndex)];
+   
+    uint finalIndex = blockPrefixSum + wavePrefixSum + localPrefixSum;
+            
+    _SortedKeys[finalIndex] = key;
+    _SortedPayloads[finalIndex] = _Payloads[keyIndex];
+}
+
+[numthreads(RadixBlockThreadGroupSize, 1, 1)]
+void RadixReorderV3(uint groupIndex : SV_GroupIndex, uint3 groupId : SV_GroupID)
+{
+    // --- Runtime Execution Context ---
+    const uint waveLaneCount = WaveGetLaneCount();
+    const uint waveCount = RadixBlockThreadGroupSize / waveLaneCount;
+    const uint waveIndex = groupIndex / waveLaneCount;
+    const uint laneId = WaveGetLaneIndex();
+    // -------------------------------------------------------------------------
+    // 1. LDS INITIALIZATION (Physical Clear)
+    // -------------------------------------------------------------------------
+    [unroll]
+    for (uint i = 0; i < MaxWaveCount; ++i)
+    {
+        if (i < waveCount)
+        {
+            gs_waveHistogram[i * RadixBinCount + groupIndex] = 0;
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    // -------------------------------------------------------------------------
+    // 2. LOCAL HISTOGRAM 
+    // -------------------------------------------------------------------------
+    
+    RadixKeyCache keyCache;
+    RadixPrefixSumCache prefixSumCache;
+    const uint blockIndex = groupId.x;
+    
+    const uint blockKeyBase = blockIndex * RadixBlockSize;
+    const uint waveBlockSize = RadixSubBlockCount * waveLaneCount;
+    const uint waveBlockBase = blockKeyBase + waveIndex * waveBlockSize;
+    
+    const uint blockKeyCount = min(_RadixParams.keyCount - blockKeyBase, RadixBlockSize);
+    const uint activeWaveCount = CeilDiv(blockKeyCount, waveBlockSize);
+    const uint lastActiveWaveIndex = activeWaveCount - 1;
+    
+    if (blockKeyCount == RadixBlockSize || waveIndex < lastActiveWaveIndex)
+    {
+        for (uint i = 0; i < RadixSubBlockCount; ++i)
+        {
+            uint keyIndex = waveBlockBase + i * waveLaneCount + laneId;
+            keyCache.subBlocks[i] = _Keys[keyIndex];
+
+        }
+        for (uint j = 0; j < RadixSubBlockCount; ++j)
+        {
+            prefixSumCache.subBlocks[j] = RadixWavePrefixSum(keyCache.subBlocks[j], waveIndex);
+        }
+    }
+    else if (waveIndex == lastActiveWaveIndex)
+    {
+        
+        const uint waveKeyCount = _RadixParams.keyCount - waveBlockBase;
+        const uint subBlockCount = CeilDiv(waveKeyCount, waveLaneCount);
+        const uint lastSubBlockIndex = subBlockCount - 1;
+        
+        for (uint i = 0; i < lastSubBlockIndex; ++i)
+        {
+            uint keyIndex = waveBlockBase + i * waveLaneCount + laneId;
+            keyCache.subBlocks[i] = _Keys[keyIndex];
+        }
+        const uint lastKeyIndex = waveBlockBase + lastSubBlockIndex * waveLaneCount + laneId;
+        keyCache.subBlocks[lastSubBlockIndex] = _Keys[clamp(lastKeyIndex, 0, _RadixParams.keyCount - 1)];
+        
+        for (uint j = 0; j < lastSubBlockIndex; ++j)
+        {
+            prefixSumCache.subBlocks[j] = RadixWavePrefixSum(keyCache.subBlocks[j], waveIndex);
+        }
+        if (lastKeyIndex < _RadixParams.keyCount)
+        {
+            prefixSumCache.subBlocks[lastSubBlockIndex] = RadixWavePrefixSum(keyCache.subBlocks[lastSubBlockIndex], waveIndex);
+        }
+    }    
+    
+    GroupMemoryBarrierWithGroupSync();
+
+    // -------------------------------------------------------------------------
+    // 3. INTER-WAVE SCAN (Exclusive Prefix Sum)
+    // -------------------------------------------------------------------------
+    uint runningSum = 0;
+    [unroll]
+    for (uint j = 0; j < MaxWaveCount; ++j)
+    {
+        if (j < waveCount)
+        {
+            // groupIndex = binIndex
+            const uint index = j * RadixBinCount + groupIndex;
+            const uint count = gs_waveHistogram[index];
+            gs_waveHistogram[index] = runningSum;
+            runningSum += count;
+        }
+    }
+    GroupMemoryBarrierWithGroupSync();
+    
+    // -------------------------------------------------------------------------
+    // 4. GLOBAL SCATTER
+    // -------------------------------------------------------------------------
+    
+    
+    if (blockKeyCount == RadixBlockSize || waveIndex < lastActiveWaveIndex)
+    {
+        for (uint i = 0; i < RadixSubBlockCount; ++i)
+        {
+            const uint keyIndex = waveBlockBase + i * waveLaneCount + laneId;            
+            RadixScatterResult(keyIndex, blockIndex, waveIndex, keyCache.subBlocks[i], prefixSumCache.subBlocks[i]);
+        }
+    }
+    else if (waveIndex == lastActiveWaveIndex)
+    {
+        
+        const uint waveKeyCount = _RadixParams.keyCount - waveBlockBase;
+        const uint subBlockCount = CeilDiv(waveKeyCount, waveLaneCount);
+        const uint lastSubBlockIndex = subBlockCount - 1;
+        
+        for (uint i = 0; i < lastSubBlockIndex; ++i)
+        {
+            const uint keyIndex = waveBlockBase + i * waveLaneCount + laneId;
+            RadixScatterResult(keyIndex, blockIndex, waveIndex, keyCache.subBlocks[i], prefixSumCache.subBlocks[i]);
+        }
+        const uint lastKeyIndex = waveBlockBase + lastSubBlockIndex * waveLaneCount + laneId;
+        if (lastKeyIndex < _RadixParams.keyCount)
+        {
+            RadixScatterResult(lastKeyIndex, blockIndex, waveIndex, keyCache.subBlocks[lastSubBlockIndex], prefixSumCache.subBlocks[lastSubBlockIndex]);
+            
+        }
+    }
+}
