@@ -5,7 +5,7 @@ namespace H2o.Sort
   /// <summary>
   /// Configuration parameters for the GPU Radix Sort operation.
   /// </summary>
-  public struct RadixGpuSorterParams
+  public struct RadixSortGpuParams
   {
     /// <summary>
     /// Total number of grid cells (value range: 0 to CellCount - 1). 
@@ -19,7 +19,7 @@ namespace H2o.Sort
 
     public void AssertValid()
     {
-      Assert.IsTrue(Validate(), $"{nameof(RadixGpuSorterParams)}: {nameof(KeyCount)} ({KeyCount}) " +
+      Assert.IsTrue(Validate(), $"{nameof(RadixSortGpuParams)}: {nameof(KeyCount)} ({KeyCount}) " +
         $"exceeds capacity of {nameof(Entries)} or {nameof(TempEntries)}.");
     }
 

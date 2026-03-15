@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: 7ef9d74370ec92e4f8c94aeaa0a5172d
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - _radixCount: {fileID: 7200000, guid: 2f22b72e64c9efb4ba877f96f21d9566, type: 3}
+  - _radixScan: {fileID: 7200000, guid: 289c944a2ac237448b1fff7189496c29, type: 3}
+  - _radixReorder: {fileID: 7200000, guid: d7e643cc49cfdbd4c95f96d055557374, type: 3}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

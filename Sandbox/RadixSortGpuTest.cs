@@ -7,7 +7,7 @@ using Random = Unity.Mathematics.Random;
 
 namespace H2o.Sort.Sandbox
 {
-  public class RadixGpuSorterTest : MonoBehaviour
+  public class RadixSortGpuTest : MonoBehaviour
   {
     [Min(1)]
     public int KeyCount = 1024;
@@ -16,11 +16,9 @@ namespace H2o.Sort.Sandbox
     public uint RandomSeed = 12345;
     public bool EnableLogArray = true;
     public uint MaxLogArrayElements = 1024;
-    public bool EnableSortV2 = true;
-    [SerializeField] RadixGpuSorterSettings _sorterSettings;
+    [SerializeField] RadixSortGpuSettings _sortSettings;
 
-    RadixGpuSorter _sorter;
-    RadixGpuSorterV2 _sorterV2;
+    RadixSortGpu _sort;
     CommandBuffer _commandBuffer;
 
 
@@ -36,11 +34,10 @@ namespace H2o.Sort.Sandbox
     {
       _commandBuffer = new CommandBuffer
       {
-        name = nameof(RadixGpuSorterTest)
+        name = nameof(RadixSortGpuTest)
       };
 
-      _sorter = new RadixGpuSorter((uint)KeyCount, _sorterSettings);
-      _sorterV2 = new RadixGpuSorterV2((uint)KeyCount, _sorterSettings);
+      _sort = new RadixSortGpu((uint)KeyCount, _sortSettings);
       _entries = new EntryGraphicsBuffers(KeyCount);
       _tempEntries = new EntryGraphicsBuffers(KeyCount); // only for compute
       _nativeEntries = new EntryNativeArrays(KeyCount, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
@@ -54,8 +51,7 @@ namespace H2o.Sort.Sandbox
     private void OnDestroy()
     {
       _commandBuffer?.Dispose();
-      _sorter.Dispose();
-      _sorterV2?.Dispose();
+      _sort?.Dispose();
       _entries.Dispose();
       _tempEntries.Dispose();
       _nativeEntries.Dispose();
@@ -132,60 +128,23 @@ namespace H2o.Sort.Sandbox
     }
     void TestSorting(bool enableValidation)
     {
-      if (EnableSortV2)
-      {
-        TestSortingV2(enableValidation);
-      }
-      else
-      {
-        TestSortingV1(enableValidation);
-      }
-    }
-    void TestSortingV1(bool enableValidation)
-    {
       _nativeEntries.UploadTo(_entries, _nativeEntries.Count);
 
       _commandBuffer.Clear();
-      RadixGpuSorterParams sparams = new RadixGpuSorterParams()
+      RadixSortGpuParams sparams = new RadixSortGpuParams()
       {
         MaxKey = MaxKey,
         KeyCount = (uint)_entries.Count,
         Entries = _entries,
         TempEntries = _tempEntries,
       };
-      EntryGraphicsBuffers sortedEntries = _sorter.Dispatch(_commandBuffer, sparams);
+      EntryGraphicsBuffers sortedEntries = _sort.Dispatch(_commandBuffer, sparams);
 
       if (enableValidation && _requestDoneCount == 0)
       {
-        RquestGlobalHistogram(nameof(_sorter.GlobalHistogram), _sorter.GlobalHistogram);
-        RquestGlobalHistogram(nameof(_sorter.BlockHistogramT), _sorter.BlockHistogramT);
-        RquestGlobalHistogram(nameof(_sorter.BlockHistogram), _sorter.BlockHistogram);
-        NativeArray<uint> keys = _readBackEntries.Keys;
-        NativeArray<uint> payloads = _readBackEntries.Payloads;
-        _commandBuffer.RequestAsyncReadbackIntoNativeArray(ref keys, sortedEntries.Keys, ReadBackSortedKeys);
-        _commandBuffer.RequestAsyncReadbackIntoNativeArray(ref payloads, sortedEntries.Payloads, ReadBackSortedPayloads);
-      }
-      Graphics.ExecuteCommandBuffer(_commandBuffer);
-    }
-    void TestSortingV2(bool enableValidation)
-    {
-      _nativeEntries.UploadTo(_entries, _nativeEntries.Count);
-
-      _commandBuffer.Clear();
-      RadixGpuSorterParams sparams = new RadixGpuSorterParams()
-      {
-        MaxKey = MaxKey,
-        KeyCount = (uint)_entries.Count,
-        Entries = _entries,
-        TempEntries = _tempEntries,
-      };
-      EntryGraphicsBuffers sortedEntries = _sorterV2.Dispatch(_commandBuffer, sparams);
-
-      if (enableValidation && _requestDoneCount == 0)
-      {
-        RquestGlobalHistogram(nameof(_sorterV2.GlobalHistogram), _sorterV2.GlobalHistogram);
-        RquestGlobalHistogram(nameof(_sorterV2.BlockHistogramT), _sorterV2.BlockHistogramT);
-        RquestGlobalHistogram(nameof(_sorterV2.BlockHistogram), _sorterV2.BlockHistogram);
+        RquestGlobalHistogram(nameof(_sort.GlobalHistogram), _sort.GlobalHistogram);
+        RquestGlobalHistogram(nameof(_sort.BlockHistogramT), _sort.BlockHistogramT);
+        RquestGlobalHistogram(nameof(_sort.BlockHistogram), _sort.BlockHistogram);
         NativeArray<uint> keys = _readBackEntries.Keys;
         NativeArray<uint> payloads = _readBackEntries.Payloads;
         _commandBuffer.RequestAsyncReadbackIntoNativeArray(ref keys, sortedEntries.Keys, ReadBackSortedKeys);
