@@ -38,7 +38,7 @@ namespace H2o.Sort
     public GraphicsBuffer BlockHistogram => _blockHistogram;
     public GraphicsBuffer BlockHistogramT => _blockHistogramT;
     public uint MaxKeyCount => _maxKeyCapacity;
-    public RadixSortGpu(uint maxKeyCapacity, RadixSortGpuSettings settings)
+    public RadixSortGpu(uint keyCapacity, RadixSortGpuSettings settings)
     {
       settings.AssertVald();
 
@@ -52,7 +52,7 @@ namespace H2o.Sort
 
       _radixScan.GetKernelThreadGroupSizes(_kernelScan, out uint groupSize, out _, out _);
       // _BlockHistogram must be aligned to groupSize
-      uint blockCount = GetBlockCount(maxKeyCapacity);
+      uint blockCount = GetBlockCount(keyCapacity);
       uint maxBlockCapacity = RadixUtils.CeilDiv(blockCount, groupSize) * groupSize;
       uint blockHistogramSize = RadixUtils.GetBlockHistogramSize(maxBlockCapacity);
       _blockHistogram = new GraphicsBuffer(GraphicsBuffer.Target.Structured, (int)blockHistogramSize, sizeof(uint));
