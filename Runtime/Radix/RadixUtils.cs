@@ -9,7 +9,7 @@ namespace H2o.Sort
     public const int BitsPerPass = 8;
     public const int BinCount = 1 << BitsPerPass;
     public const uint Mask = BinCount - 1;
-    public const int MinBlockSize = 512;
+    public const int MinBlockSize = 1024;
     public const int JobBatchSize = 64; // for Job System innerLoopBatchCount
     public const uint GlobalBinCount = MaxPasses * BinCount;
     public const uint KeysPerBlock = BinCount;

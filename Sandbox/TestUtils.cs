@@ -10,23 +10,19 @@ namespace H2o.Sort.Sandbox
   public static class TestUtils
   {
     static StringBuilder _stringBuilder = new StringBuilder(4096 * 2);
-    public static void LogElapsedTime(string lable, long ticks)
+    public static string ToUnitString(this TimeSpan timeSpan)
     {
-      LogElapsedTime(lable, new TimeSpan(ticks));
-    }
-    public static void LogElapsedTime(string lable, TimeSpan elapsedTime)
-    {
-      if (elapsedTime.Ticks >= TimeSpan.TicksPerSecond)
+      if (timeSpan.Ticks >= TimeSpan.TicksPerSecond)
       {
-        Debug.Log($"{lable} elapsed {elapsedTime.TotalSeconds:F3} seconds");
+        return $"{timeSpan.TotalSeconds:F3} seconds";
       }
-      else if (elapsedTime.Ticks >= TimeSpan.TicksPerMillisecond)
+      else if (timeSpan.Ticks >= TimeSpan.TicksPerMillisecond)
       {
-        Debug.Log($"{lable} elapsed {elapsedTime.TotalMilliseconds:F3} ms");
+        return $"{timeSpan.TotalMilliseconds:F3} ms";
       }
       else
       {
-        Debug.Log($"{lable} elapsed {elapsedTime.Ticks} ticks");
+        return $"{timeSpan.Ticks} ticks";
       }
     }
     public static void ValidateSortedEntries(NativeArray<uint> sortedKeys, NativeArray<uint> sortedPayloads, NativeArray<uint> rawKeys)
@@ -70,9 +66,6 @@ namespace H2o.Sort.Sandbox
     {
       if (sortedEntries.Length == 0) return;
 
-      Debug.Log($"ValidateSortedEntries Start");
-
-
       uint keyErrorCount = 0;
       int count = sortedEntries.Length;
 
@@ -100,7 +93,6 @@ namespace H2o.Sort.Sandbox
       }
       Debug.Log($"{nameof(keyErrorCount)}({keyErrorCount})");
       Debug.Log($"{nameof(payloadErrorCount)}({payloadErrorCount})");
-      Debug.Log($"ValidateSortedEntries End");
     }
     public static void LogArray(string name, NativeArray<uint> data, uint maxLogArrayElements)
     {
