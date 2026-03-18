@@ -17,9 +17,14 @@ namespace H2o.Sort.Sandbox
     protected EntryNativeArrays _rawEntries;
     protected EntryNativeArrays _entries;
     protected EntryNativeArrays _tempEntries;
-    protected Random _random;
 
-    RadixSortParallel _sortParallel;
+
+    NativeArray<Entry> _rawEntriesV2;
+    NativeArray<Entry> _entriesV2;
+    NativeArray<Entry> _tempEntriesV2;
+    protected Random _random;
+    RadixSort<Entry> _sort;
+    RadixSortParallel<Entry> _sortParallel;
     // Start is called once before the first execution of Update after the MonoBehaviour is created
     protected virtual void Start()
     {
@@ -27,15 +32,24 @@ namespace H2o.Sort.Sandbox
       _rawEntries = new EntryNativeArrays(Count, Allocator.Persistent);
       _entries = new EntryNativeArrays(Count, Allocator.Persistent);
       _tempEntries = new EntryNativeArrays(Count, Allocator.Persistent);
-      _sortParallel = new RadixSortParallel();
-
+      _rawEntriesV2 = new NativeArray<Entry>(Count, Allocator.Persistent);
+      _entriesV2 = new NativeArray<Entry>(Count, Allocator.Persistent);
+      _tempEntriesV2 = new NativeArray<Entry>(Count, Allocator.Persistent);
+      _sort = new RadixSort<Entry>();
+      _sortParallel = new RadixSortParallel<Entry>();
 
       NativeArray<uint> keys = _rawEntries.Keys;
       NativeArray<uint> payloads = _rawEntries.Payloads;
       uint EndKey = MaxKey + 1;
       for (int i = 0; i < Count; i++)
       {
-        _rawEntries.Set(i, _random.NextUInt(EndKey), (uint)i);
+        uint key = _random.NextUInt(EndKey);
+        _rawEntries.Set(i, key, (uint)i);
+        _rawEntriesV2[i] = new Entry()
+        {
+          Key = key,
+          Payload = (uint)i
+        };
       }
 
       SortTest();
@@ -47,76 +61,78 @@ namespace H2o.Sort.Sandbox
       if (_rawEntries.IsCreated) _rawEntries.Dispose();
       if (_entries.IsCreated) _entries.Dispose();
       if (_tempEntries.IsCreated) _tempEntries.Dispose();
+      if (_rawEntriesV2.IsCreated) _rawEntriesV2.Dispose();
+      if (_entriesV2.IsCreated) _entriesV2.Dispose();
+      if (_tempEntriesV2.IsCreated) _tempEntriesV2.Dispose();
       _sortParallel?.Dispose();
     }
 
-
-    NativeEntries GetNativeEntries(EntryNativeArrays entries)
-    {
-      return new NativeEntries()
-      {
-        Keys = entries.Keys,
-        Payloads = entries.Payloads,
-      };
-    }
     void SortTest()
     {
-      RadixSortParams rsParams = new RadixSortParams()
+      RadixSortParams<Entry> rsParams = new RadixSortParams<Entry>()
       {
         MaxKey = MaxKey,
         Count = Count,
-        Entries = GetNativeEntries(_entries),
-        TempEntries = GetNativeEntries(_tempEntries),
+        Entries = _entriesV2,
+        TempEntries = _tempEntriesV2,
       };
       Stopwatch stopwatch = Stopwatch.StartNew();
       for (int i = 0; i < Iterations; i++)
       {
-        _entries.Keys.CopyFrom(_rawEntries.Keys);
-        _entries.Payloads.CopyFrom(_rawEntries.Payloads);
+        _entriesV2.CopyFrom(_rawEntriesV2);
         stopwatch.Restart();
-        RadixSort.Schedule(rsParams, out NativeEntries sortedEntries).Complete();
-        TestUtils.LogElapsedTime($"Sort({i})", stopwatch.Elapsed);
+        _sort.Schedule(rsParams, out NativeArray<Entry> sortedEntries).Complete();
+        TestUtils.LogElapsedTime($"SortV2({i})", stopwatch.Elapsed);
         if (i == 0)
         {
-          TestUtils.ValidateSortedEntries(sortedEntries.Keys, sortedEntries.Payloads, _rawEntries.Keys);
+          TestUtils.ValidateSortedEntries(sortedEntries, _rawEntriesV2);
 
           if (EnableLogArray)
           {
-            TestUtils.LogArray("_rawEntries.Keys", sortedEntries.Keys, MaxLogArrayElements);
-            TestUtils.LogArray("sortedEntries.Keys", sortedEntries.Keys, MaxLogArrayElements);
-            TestUtils.LogArray("sortedEntries.Payloads", sortedEntries.Payloads, MaxLogArrayElements);
+            TestUtils.LogKeys("_rawEntries.Keys", _rawEntriesV2, MaxLogArrayElements);
+            TestUtils.LogKeys("sortedEntries.Keys", sortedEntries, MaxLogArrayElements);
+            TestUtils.LogPaylods("sortedEntries.Payloads", sortedEntries, MaxLogArrayElements);
           }
         }
       }
     }
     void SortParallelTest()
     {
-      RadixSortParams rsParams = new RadixSortParams()
+      var rsParams = new RadixSortParams<Entry>()
       {
         MaxKey = MaxKey,
         Count = Count,
-        Entries = GetNativeEntries(_entries),
-        TempEntries = GetNativeEntries(_tempEntries),
+        Entries = _entriesV2,
+        TempEntries = _tempEntriesV2,
       };
+      System.TimeSpan totalTime = new System.TimeSpan(0);
       Stopwatch stopwatch = Stopwatch.StartNew();
       for (int i = 0; i < Iterations; i++)
       {
-        _entries.Keys.CopyFrom(_rawEntries.Keys);
-        _entries.Payloads.CopyFrom(_rawEntries.Payloads);
+        _entriesV2.CopyFrom(_rawEntriesV2);
         stopwatch.Restart();
-        _sortParallel.Schedule(rsParams, out NativeEntries sortedEntries).Complete();
+        _sortParallel.Schedule(rsParams, out NativeArray<Entry> sortedEntries).Complete();
+        stopwatch.Stop();
         TestUtils.LogElapsedTime($"SortParallel({i})", stopwatch.Elapsed);
         if (i == 0)
         {
-          TestUtils.ValidateSortedEntries(sortedEntries.Keys, sortedEntries.Payloads, _rawEntries.Keys);
+          TestUtils.ValidateSortedEntries(sortedEntries, _rawEntriesV2);
 
           if (EnableLogArray)
           {
-            TestUtils.LogArray("_rawEntries.Keys", sortedEntries.Keys, MaxLogArrayElements);
-            TestUtils.LogArray("sortedEntries.Keys", sortedEntries.Keys, MaxLogArrayElements);
-            TestUtils.LogArray("sortedEntries.Payloads", sortedEntries.Payloads, MaxLogArrayElements);
+            TestUtils.LogKeys("_rawEntries.Keys", _rawEntriesV2, MaxLogArrayElements);
+            TestUtils.LogKeys("sortedEntries.Keys", sortedEntries, MaxLogArrayElements);
+            TestUtils.LogPaylods("sortedEntries.Payloads", sortedEntries, MaxLogArrayElements);
           }
         }
+        else
+        {
+          totalTime += stopwatch.Elapsed;
+        }
+      }
+      if (Iterations > 1)
+      {
+        TestUtils.LogElapsedTime($"SortParallel average = ", totalTime / (Iterations - 1));
       }
     }
   }

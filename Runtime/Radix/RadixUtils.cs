@@ -47,10 +47,10 @@ namespace H2o.Sort
     {
       return blockCount * KeysPerBlock;
     }
-    public static int GetPassCount(uint maxValue)
+    public static int GetPassCount(uint maxKey)
     {
-      if (maxValue <= 0) return 0;
-      int maxBit = 31 - math.lzcnt(maxValue);
+      if (maxKey <= 0) return 0;
+      int maxBit = 31 - math.lzcnt(maxKey);
       return maxBit / BitsPerPass + 1;
     }
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
