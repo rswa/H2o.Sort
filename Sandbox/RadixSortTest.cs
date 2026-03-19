@@ -45,8 +45,8 @@ namespace H2o.Sort.Sandbox
         };
       }
 
-      SortTest(false);
-      SortTest(true);
+      TestSorting(false);
+      TestSorting(true);
     }
 
     protected virtual void OnDestroy()
@@ -57,7 +57,7 @@ namespace H2o.Sort.Sandbox
       _sortParallel?.Dispose();
     }
 
-    void SortTest(bool parallel)
+    void TestSorting(bool parallel)
     {
       string parallelState = parallel ? "Parallel" : "Single";
       Debug.Log($"=================== RadixSort {parallelState} ===================");

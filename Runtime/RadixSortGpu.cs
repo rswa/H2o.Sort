@@ -16,12 +16,18 @@ namespace H2o.Sort
     static readonly int PayloadsId = Shader.PropertyToID("_Payloads");
     static readonly int SortedPayloadsId = Shader.PropertyToID("_SortedPayloads");
     static readonly int SortedKeysId = Shader.PropertyToID("_SortedKeys");
+    static readonly int EntriesId = Shader.PropertyToID("_Entries");
+    static readonly int SortedEntriesId = Shader.PropertyToID("_SortedEntries");
+
 
     private int _kernelClearGlobalHistogram = -1;
     private int _kernelCount = -1;
     private int _kernelScan = -1;
     private int _kernelReorder = -1;
 
+
+    private LocalKeyword _countEnablePayload;
+    private LocalKeyword _reorderEnablePayload;
 
     private bool _disposed = false;
     private uint _maxKeyCapacity;
@@ -45,6 +51,9 @@ namespace H2o.Sort
       _radixCount = settings.RadixCount;
       _radixScan = settings.RadixScan;
       _radixReorder = settings.RadixReorder;
+
+      _countEnablePayload = new LocalKeyword(_radixCount, "ENABLE_PAYLOAD");
+      _reorderEnablePayload = new LocalKeyword(_radixReorder, "ENABLE_PAYLOAD");
 
       _globalHistogram = new GraphicsBuffer(GraphicsBuffer.Target.Structured, (int)RadixUtils.GlobalBinCount, sizeof(uint));
 
@@ -104,19 +113,18 @@ namespace H2o.Sort
     /// The <see cref="EntryGraphicsBuffers"/> containing the final sorted result.
     /// <para>Note: Due to ping-pong swapping, this may be either the input Entries or TempEntries.</para>
     /// </returns>
-    public EntryGraphicsBuffers Dispatch(CommandBuffer cmd, RadixSortGpuParams rsParams)
+    public GraphicsBuffer Dispatch(CommandBuffer cmd, RadixSortGpuParams rsParams)
     {
       rsParams.AssertValid();
       Assert.IsNotNull(cmd, $"{nameof(Dispatch)}: {nameof(cmd)} is null");
-      Assert.IsTrue(_maxKeyCapacity >= rsParams.KeyCount, $"{nameof(_maxKeyCapacity)}({_maxKeyCapacity}) < {nameof(rsParams)}.{nameof(rsParams.KeyCount)}({rsParams.KeyCount})");
+      Assert.IsTrue(_maxKeyCapacity >= rsParams.EntryCount, $"{nameof(_maxKeyCapacity)}({_maxKeyCapacity}) < {nameof(rsParams)}.{nameof(rsParams.EntryCount)}({rsParams.EntryCount})");
 
       int passCount = RadixUtils.GetPassCount(rsParams.MaxKey);
       uint globalBinCount = RadixUtils.GetGlobalBinCount(passCount);
-      uint blockCount = GetBlockCount(rsParams.KeyCount);
-      //Debug.Log($"{nameof(passCount)} = {passCount}");
-      //Debug.Log($"{nameof(globalBinCount)} = {globalBinCount}");
-      //Debug.Log($"{nameof(blockCount)} = {blockCount}");
-      //Debug.Log($"{nameof(RadixUtils.BlockSize)} = {RadixUtils.BlockSize}");
+      uint blockCount = GetBlockCount(rsParams.EntryCount);
+
+      cmd.SetKeyword(_radixCount, _countEnablePayload, rsParams.EnablePayload);
+      cmd.SetKeyword(_radixReorder, _reorderEnablePayload, rsParams.EnablePayload);
 
       cmd.SetComputeBufferParam(_radixCount, _kernelClearGlobalHistogram, GlobalHistogramId, _globalHistogram);
       ComputeHelpers.Dispatch(cmd, _radixCount, _kernelClearGlobalHistogram, globalBinCount);
@@ -140,93 +148,33 @@ namespace H2o.Sort
 
       RadixParams radixParams = new RadixParams
       {
-        keyCount = rsParams.KeyCount,
-        blockCount = blockCount
+        EntryCount = rsParams.EntryCount,
+        BlockCount = blockCount
       };
 
-      EntryGraphicsBuffers source = rsParams.Entries;
-      EntryGraphicsBuffers destination = rsParams.TempEntries;
+      GraphicsBuffer source = rsParams.Entries;
+      GraphicsBuffer destination = rsParams.TempEntries;
       for (uint passIndex = 0; passIndex < passCount; ++passIndex)
       {
-        radixParams.passIndex = passIndex;
+        radixParams.PassIndex = passIndex;
         _radixParams.UpdateData(cmd, radixParams);
 
-        cmd.SetComputeBufferParam(_radixCount, _kernelCount, KeysId, source.Keys);
+        cmd.SetComputeBufferParam(_radixCount, _kernelCount, EntriesId, source);
 
-        cmd.SetComputeBufferParam(_radixReorder, _kernelReorder, KeysId, source.Keys);
-        cmd.SetComputeBufferParam(_radixReorder, _kernelReorder, PayloadsId, source.Payloads);
-        cmd.SetComputeBufferParam(_radixReorder, _kernelReorder, SortedKeysId, destination.Keys);
-        cmd.SetComputeBufferParam(_radixReorder, _kernelReorder, SortedPayloadsId, destination.Payloads);
+        cmd.SetComputeBufferParam(_radixReorder, _kernelReorder, EntriesId, source);
+        cmd.SetComputeBufferParam(_radixReorder, _kernelReorder, SortedEntriesId, destination);
 
-        cmd.BeginSample("RadixCountV3");
+        cmd.BeginSample("RadixCount");
         cmd.DispatchCompute(_radixCount, _kernelCount, (int)blockCount, 1, 1);
-        cmd.EndSample("RadixCountV3");
+        cmd.EndSample("RadixCount");
 
         cmd.BeginSample("RadixScan");
         cmd.DispatchCompute(_radixScan, _kernelScan, RadixUtils.BinCount, 1, 1);
         cmd.EndSample("RadixScan");
 
-        cmd.BeginSample("RadixReorderV3");
+        cmd.BeginSample("RadixReorder");
         cmd.DispatchCompute(_radixReorder, _kernelReorder, (int)blockCount, 1, 1);
-        cmd.EndSample("RadixReorderV3");
-        (source, destination) = (destination, source);
-      }
-      return source;
-    }
-    public EntryGraphicsBuffers Dispatch(RadixSortGpuParams rsParams)
-    {
-      rsParams.AssertValid();
-      Assert.IsTrue(_maxKeyCapacity >= rsParams.KeyCount, $"{nameof(_maxKeyCapacity)}({_maxKeyCapacity}) < {nameof(rsParams)}.{nameof(rsParams.KeyCount)}({rsParams.KeyCount})");
-
-      int passCount = RadixUtils.GetPassCount(rsParams.MaxKey);
-      uint globalBinCount = RadixUtils.GetGlobalBinCount(passCount);
-      uint blockCount = GetBlockCount(rsParams.KeyCount);
-      Debug.Log($"{nameof(passCount)} = {passCount}");
-      Debug.Log($"{nameof(globalBinCount)} = {globalBinCount}");
-      Debug.Log($"{nameof(blockCount)} = {blockCount}");
-
-      _radixCount.SetBuffer(_kernelClearGlobalHistogram, GlobalHistogramId, _globalHistogram);
-      ComputeHelpers.Dispatch(_radixCount, _kernelClearGlobalHistogram, globalBinCount);
-
-
-      _radixCount.SetBuffer(_kernelCount, GlobalHistogramId, _globalHistogram);
-      _radixCount.SetBuffer(_kernelCount, BlockHistogramsTId, _blockHistogramT);
-
-
-      _radixScan.SetBuffer(_kernelScan, GlobalHistogramId, _globalHistogram);
-      _radixScan.SetBuffer(_kernelScan, BlockHistogramsTId, _blockHistogramT);
-      _radixScan.SetBuffer(_kernelScan, BlockHistogramsId, _blockHistogram);
-
-      _radixReorder.SetBuffer(_kernelReorder, BlockHistogramsId, _blockHistogram);
-
-      _radixParams.Set(_radixCount, RadixParamsId);
-      _radixParams.Set(_radixScan, RadixParamsId);
-      _radixParams.Set(_radixReorder, RadixParamsId);
-
-      RadixParams radixParams = new RadixParams
-      {
-        keyCount = rsParams.KeyCount,
-        blockCount = blockCount
-      };
-
-      EntryGraphicsBuffers source = rsParams.Entries;
-      EntryGraphicsBuffers destination = rsParams.TempEntries;
-      for (uint passIndex = 0; passIndex < passCount; ++passIndex)
-      {
-        radixParams.passIndex = passIndex;
-        _radixParams.UpdateData(radixParams);
-
-        _radixCount.SetBuffer(_kernelCount, KeysId, source.Keys);
-
-        _radixReorder.SetBuffer(_kernelReorder, KeysId, source.Keys);
-        _radixReorder.SetBuffer(_kernelReorder, PayloadsId, source.Payloads);
-        _radixReorder.SetBuffer(_kernelReorder, SortedKeysId, destination.Keys);
-        _radixReorder.SetBuffer(_kernelReorder, SortedPayloadsId, destination.Payloads);
-
-        _radixCount.Dispatch(_kernelCount, (int)blockCount, 1, 1);
-
-        _radixScan.Dispatch(_kernelScan, RadixUtils.BinCount, 1, 1);
-        _radixReorder.Dispatch(_kernelReorder, (int)blockCount, 1, 1);
+        cmd.EndSample("RadixReorder");
         (source, destination) = (destination, source);
       }
       return source;
@@ -234,9 +182,9 @@ namespace H2o.Sort
     void FetchKernelIds()
     {
       _kernelClearGlobalHistogram = _radixCount.FindKernel("RadixClearGlobalHistogram");
-      _kernelCount = _radixCount.FindKernel("RadixCountV3");
+      _kernelCount = _radixCount.FindKernel("RadixCount");
       _kernelScan = _radixScan.FindKernel("RadixScan");
-      _kernelReorder = _radixReorder.FindKernel("RadixReorderV3");
+      _kernelReorder = _radixReorder.FindKernel("RadixReorder");
     }
     // --- std140 Layout Alignment Rules ---
     // 1. Scalar (int, float, uint, bool): 
@@ -258,9 +206,9 @@ namespace H2o.Sort
     [StructLayout(LayoutKind.Explicit, Size = 16)] // Aligned to 16 bytes
     struct RadixParams
     {
-      [FieldOffset(0)] public uint passIndex;
-      [FieldOffset(4)] public uint keyCount;
-      [FieldOffset(8)] public uint blockCount;
+      [FieldOffset(0)] public uint PassIndex;
+      [FieldOffset(4)] public uint EntryCount;
+      [FieldOffset(8)] public uint BlockCount;
     }
   }
 }

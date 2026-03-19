@@ -25,12 +25,10 @@ namespace H2o.Sort.Sandbox
         return $"{timeSpan.Ticks} ticks";
       }
     }
+    [HideInCallstack]
     public static void ValidateSortedEntries(NativeArray<uint> sortedKeys, NativeArray<uint> sortedPayloads, NativeArray<uint> rawKeys)
     {
       if (sortedKeys.Length == 0) return;
-
-      Debug.Log($"ValidateSortedEntries Start");
-
 
       uint keyErrorCount = 0;
       int count = sortedKeys.Length;
@@ -59,9 +57,29 @@ namespace H2o.Sort.Sandbox
       }
       Debug.Log($"{nameof(keyErrorCount)}({keyErrorCount})");
       Debug.Log($"{nameof(payloadErrorCount)}({payloadErrorCount})");
-      Debug.Log($"ValidateSortedEntries End");
     }
+    [HideInCallstack]
+    public static void ValidateSortedKeyEntries(NativeArray<uint> sortedKeys, NativeArray<uint> rawKeys)
+    {
+      if (sortedKeys.Length == 0) return;
 
+      uint keyErrorCount = 0;
+      int count = sortedKeys.Length;
+
+      uint preKey = sortedKeys[0];
+      for (int i = 1; i < count; i++)
+      {
+        uint currentKey = sortedKeys[i];
+        if (preKey > currentKey)
+        {
+          ++keyErrorCount;
+        }
+        preKey = currentKey;
+      }
+
+      Debug.Log($"{nameof(keyErrorCount)}({keyErrorCount})");
+    }
+    [HideInCallstack]
     public static void ValidateSortedEntries(NativeArray<Entry> sortedEntries, NativeArray<Entry> rawEntries)
     {
       if (sortedEntries.Length == 0) return;
@@ -94,6 +112,7 @@ namespace H2o.Sort.Sandbox
       Debug.Log($"{nameof(keyErrorCount)}({keyErrorCount})");
       Debug.Log($"{nameof(payloadErrorCount)}({payloadErrorCount})");
     }
+    [HideInCallstack]
     public static void LogArray(string name, NativeArray<uint> data, uint maxLogArrayElements)
     {
       uint size = math.min(maxLogArrayElements, (uint)data.Length);
@@ -107,6 +126,7 @@ namespace H2o.Sort.Sandbox
       }
       Debug.Log($"{name}: {_stringBuilder}");
     }
+    [HideInCallstack]
     public static void LogKeys(string name, NativeArray<Entry> entries, uint maxLogArrayElements)
     {
       uint size = math.min(maxLogArrayElements, (uint)entries.Length);
@@ -120,6 +140,7 @@ namespace H2o.Sort.Sandbox
       }
       Debug.Log($"{name}: {_stringBuilder}");
     }
+    [HideInCallstack]
     public static void LogPaylods(string name, NativeArray<Entry> entries, uint maxLogArrayElements)
     {
       uint size = math.min(maxLogArrayElements, (uint)entries.Length);

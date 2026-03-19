@@ -15,14 +15,21 @@ static const uint RadixBlockSize = RadixBlockThreadGroupSize * RadixSubBlockCoun
 
 struct RadixKeyCache
 {
-    uint subBlocks[RadixSubBlockCount];
+    uint SubBlocks[RadixSubBlockCount];
 };
 struct RadixPayloadCache
 {
-    uint subBlocks[RadixSubBlockCount];
+    uint SubBlocks[RadixSubBlockCount];
 };
 struct RadixPrefixSumCache
 {
-    uint subBlocks[RadixSubBlockCount];
+    uint SubBlocks[RadixSubBlockCount];
+};
+struct RadixEntry
+{
+    uint Key;
+#if defined(ENABLE_PAYLOAD)
+    uint Payload;
+#endif
 };
 #endif // RADIX_DEFINITIONS_HLSL

@@ -1,7 +1,8 @@
 #pragma kernel RadixClearGlobalHistogram
 #pragma kernel RadixCount
-#pragma kernel RadixCountV2
-#pragma kernel RadixCountV3
+
+
+#pragma multi_compile_local _ ENABLE_PAYLOAD
 
 #pragma target 6.0
 #pragma use_dxc 
@@ -14,8 +15,7 @@
 // GroupSize: Exactly 256 threads, mapping 1:1 to Radix Bins for efficient LDS usage
 static const int GroupSize = RadixBinCount;
 
-
-StructuredBuffer<uint> _Keys;
+StructuredBuffer<RadixEntry> _Entries;
 
 //_BlockHistogramT Layout: [BinIndex * _BlockCount + BlockIndex]
 // Bin-Major layout ensures the next pass (Scan) has perfectly coalesced memory reads.
@@ -31,7 +31,7 @@ groupshared uint gs_histogram[RadixBinCount];
 void RadixWaveCountKey(uint key)
 {
     const uint laneId = WaveGetLaneIndex();
-    const uint binIndex = RadixKeyToBinIndex(key, _RadixParams.passIndex);
+    const uint binIndex = RadixKeyToBinIndex(key, _RadixParams.PassIndex);
         
     const uint4 ballot = RadixWaveBinBallot(binIndex);
     const uint count = RadixWaveCountBits(ballot);
@@ -47,169 +47,6 @@ void RadixClearGlobalHistogram(uint3 dispatchId : SV_DispatchThreadID)
 {
     _GlobalHistogram[dispatchId.x] = 0;
 }
-
-[numthreads(GroupSize, 1, 1)]
-void RadixCount(uint3 dispatchId : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex, uint3 groupId : SV_GroupID)
-{
-    // --- Hardware Context ---
-    const uint waveLaneCount = WaveGetLaneCount();
-    const uint waveCount = GroupSize / waveLaneCount;
-    const uint waveId = groupIndex / waveLaneCount;
-    const uint laneId = WaveGetLaneIndex();
-    const uint lastLaneId = waveLaneCount - 1; // Correct index for the last thread in any hardware wave.
-    
-    const uint binIndex = groupIndex;
-    const uint blockIndex = groupId.x;
-    
-    // 1. Initial Local Count (Intra-Block)
-    gs_histogram[binIndex] = 0;
-    GroupMemoryBarrierWithGroupSync();
-
-    if (dispatchId.x < _RadixParams.keyCount)
-    {
-        uint keyBinIndex = RadixKeyToBinIndex(_Keys[dispatchId.x], _RadixParams.passIndex);
-        InterlockedAdd(gs_histogram[keyBinIndex], 1);
-    }
-    GroupMemoryBarrierWithGroupSync();
-    
-    // 2. Persist Local Bin Count (For subsequent Block-Scan)
-    uint binCount = gs_histogram[binIndex];
-    _BlockHistogramT[binIndex * _RadixParams.blockCount + blockIndex] = binCount;
-    
-    GroupMemoryBarrierWithGroupSync();
-    
-    // 3. Hierarchical Scan (Reducing cross-wave dependencies within the block)
-    
-    // [Step A] Intra-Wave Exclusive Scan: Get prefix sums within each wave.
-    uint binPrefixSum = WavePrefixSum(binCount);
-    if (laneId == lastLaneId)
-    {
-        gs_histogram[waveId] = binPrefixSum + binCount; // Store total count of the wave
-    }
-    GroupMemoryBarrierWithGroupSync();
-
-    // [Step B] Inter-Wave Scan: Align wave offsets relative to the entire block.
-    if (waveCount <= waveLaneCount)
-    {
-        // exclusive prefix sum
-        gs_histogram[groupIndex] = groupIndex < waveCount ? WavePrefixSum(gs_histogram[groupIndex]) : 0;
-        GroupMemoryBarrierWithGroupSync();
-    }
-    else
-    {
-        /** * Robust Path: For small wave hardware (e.g. mobile). 
-         * First wave acts as a serial scanner to propagate inclusive sums across wave boundaries.
-         */
-        uint iterations = waveCount / waveLaneCount;
-        uint iterationPrefixSum = 0;
-        uint iterationWaveId = groupIndex;
-
-        for (uint i = 0; i < iterations; ++i)
-        {
-            if (groupIndex < waveLaneCount)
-            {
-                uint val = gs_histogram[iterationWaveId];
-                uint pSum = WavePrefixSum(val);
-                
-                // Overwrite with calibrated prefix sum
-                gs_histogram[iterationWaveId] = pSum + iterationPrefixSum;
-                
-                // Capture inclusive total for next iteration via Wave broadcast
-                iterationPrefixSum += WaveReadLaneAt(val + pSum, lastLaneId);
-                iterationWaveId += waveLaneCount;
-            }
-            GroupMemoryBarrierWithGroupSync();
-        }
-    }
-    
-    // [Step C] Global Atomic Accumulation    
-    uint blockBinPrefixSum = gs_histogram[waveId] + binPrefixSum;
-    if (blockBinPrefixSum > 0)
-    {
-        InterlockedAdd(_GlobalHistogram[RadixGetPassGlobalBinIndex(binIndex, _RadixParams.passIndex)], blockBinPrefixSum);
-    }
-}
-[numthreads(GroupSize, 1, 1)]
-void RadixCountV2(uint3 dispatchId : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex, uint3 groupId : SV_GroupID)
-{
-    // --- Hardware Context ---
-    const uint waveLaneCount = WaveGetLaneCount();
-    const uint waveCount = GroupSize / waveLaneCount;
-    const uint waveId = groupIndex / waveLaneCount;
-    const uint laneId = WaveGetLaneIndex();
-    const uint lastLaneId = waveLaneCount - 1; // Correct index for the last thread in any hardware wave.
-    
-    const uint binIndex = groupIndex;
-    const uint blockIndex = groupId.x;
-    
-    // 1. Initial Local Count (Intra-Block)
-    gs_histogram[binIndex] = 0;
-    GroupMemoryBarrierWithGroupSync();
-
-    if (dispatchId.x < _RadixParams.keyCount)
-    {
-        RadixWaveCountKey(_Keys[dispatchId.x]);
-    }
-    GroupMemoryBarrierWithGroupSync();
-    
-    // 2. Persist Local Bin Count (For subsequent Block-Scan)
-    uint binCount = gs_histogram[binIndex];
-    _BlockHistogramT[binIndex * _RadixParams.blockCount + blockIndex] = binCount;
-    
-    GroupMemoryBarrierWithGroupSync();
-    
-    // 3. Hierarchical Scan (Reducing cross-wave dependencies within the block)
-    
-    // [Step A] Intra-Wave Exclusive Scan: Get prefix sums within each wave.
-    uint binPrefixSum = WavePrefixSum(binCount);
-    if (laneId == lastLaneId)
-    {
-        gs_histogram[waveId] = binPrefixSum + binCount; // Store total count of the wave
-    }
-    GroupMemoryBarrierWithGroupSync();
-
-    // [Step B] Inter-Wave Scan: Align wave offsets relative to the entire block.
-    if (waveCount <= waveLaneCount)
-    {
-        // exclusive prefix sum
-        gs_histogram[groupIndex] = groupIndex < waveCount ? WavePrefixSum(gs_histogram[groupIndex]) : 0;
-        GroupMemoryBarrierWithGroupSync();
-    }
-    else
-    {
-        /** * Robust Path: For small wave hardware (e.g. mobile). 
-         * First wave acts as a serial scanner to propagate inclusive sums across wave boundaries.
-         */
-        uint iterations = waveCount / waveLaneCount;
-        uint iterationPrefixSum = 0;
-        uint iterationWaveId = groupIndex;
-
-        for (uint i = 0; i < iterations; ++i)
-        {
-            if (groupIndex < waveLaneCount)
-            {
-                uint val = gs_histogram[iterationWaveId];
-                uint pSum = WavePrefixSum(val);
-                
-                // Overwrite with calibrated prefix sum
-                gs_histogram[iterationWaveId] = pSum + iterationPrefixSum;
-                
-                // Capture inclusive total for next iteration via Wave broadcast
-                iterationPrefixSum += WaveReadLaneAt(val + pSum, lastLaneId);
-                iterationWaveId += waveLaneCount;
-            }
-            GroupMemoryBarrierWithGroupSync();
-        }
-    }
-    
-    // [Step C] Global Atomic Accumulation    
-    uint blockBinPrefixSum = gs_histogram[waveId] + binPrefixSum;
-    if (blockBinPrefixSum > 0)
-    {
-        InterlockedAdd(_GlobalHistogram[RadixGetPassGlobalBinIndex(binIndex, _RadixParams.passIndex)], blockBinPrefixSum);
-    }
-}
-
 // inclusive prefix sum
 void RadixScanWaveHistogram(uint groupIndex, uint waveId, uint waveCount)
 {
@@ -261,7 +98,7 @@ void RadixScanWaveHistogram(uint groupIndex, uint waveId, uint waveCount)
 }
 
 [numthreads(RadixBlockThreadGroupSize, 1, 1)]
-void RadixCountV3(uint groupIndex : SV_GroupIndex, uint3 groupId : SV_GroupID)
+void RadixCount(uint groupIndex : SV_GroupIndex, uint3 groupId : SV_GroupID)
 {
     // --- Hardware Context ---
     const uint waveLaneCount = WaveGetLaneCount();
@@ -281,39 +118,39 @@ void RadixCountV3(uint groupIndex : SV_GroupIndex, uint3 groupId : SV_GroupID)
     RadixKeyCache keyCache;
     
     const uint blockKeyBase = blockIndex * RadixBlockSize;
-    if (blockIndex < (_RadixParams.blockCount - 1)
-        || (blockKeyBase + RadixBlockSize) == _RadixParams.keyCount)
+    if (blockIndex < (_RadixParams.BlockCount - 1)
+        || (blockKeyBase + RadixBlockSize) == _RadixParams.EntryCount)
     {
         for (uint i = 0; i < RadixSubBlockCount; ++i)
         {
             uint keyIndex = blockKeyBase + i * RadixBlockThreadGroupSize + threadIndex;
-            keyCache.subBlocks[i] = _Keys[keyIndex];
+            keyCache.SubBlocks[i] = _Entries[keyIndex].Key;
         }
         for (uint j = 0; j < RadixSubBlockCount; ++j)
         {
-            RadixWaveCountKey(keyCache.subBlocks[j]);
+            RadixWaveCountKey(keyCache.SubBlocks[j]);
         }
     }
     else
     {
-        const uint lastBlockKeyCount = _RadixParams.keyCount - blockKeyBase;
+        const uint lastBlockKeyCount = _RadixParams.EntryCount - blockKeyBase;
         const uint subBlockCount = CeilDiv(lastBlockKeyCount, RadixBlockThreadGroupSize);
         const uint lastSubBlockIndex = subBlockCount - 1;
         for (uint i = 0; i < lastSubBlockIndex; ++i)
         {
             uint keyIndex = blockKeyBase + i * RadixBlockThreadGroupSize + threadIndex;
-            keyCache.subBlocks[i] = _Keys[keyIndex];
+            keyCache.SubBlocks[i] = _Entries[keyIndex].Key;
         }
         const uint lastKeyIndex = blockKeyBase + lastSubBlockIndex * RadixBlockThreadGroupSize + threadIndex;
-        keyCache.subBlocks[lastSubBlockIndex] = _Keys[clamp(lastKeyIndex, 0, _RadixParams.keyCount - 1)];
-        
+        keyCache.SubBlocks[lastSubBlockIndex] = _Entries[clamp(lastKeyIndex, 0, _RadixParams.EntryCount - 1)].Key;
+                
         for (uint j = 0; j < lastSubBlockIndex; ++j)
         {
-            RadixWaveCountKey(keyCache.subBlocks[j]);
+            RadixWaveCountKey(keyCache.SubBlocks[j]);
         }
-        if (lastKeyIndex < _RadixParams.keyCount)
+        if (lastKeyIndex < _RadixParams.EntryCount)
         {
-            RadixWaveCountKey(keyCache.subBlocks[lastSubBlockIndex]);
+            RadixWaveCountKey(keyCache.SubBlocks[lastSubBlockIndex]);
         }
     }
     
@@ -346,6 +183,6 @@ void RadixCountV3(uint groupIndex : SV_GroupIndex, uint3 groupId : SV_GroupID)
     uint blockBinPrefixSum = wavePrefixSum + binPrefixSum;
     if (blockBinPrefixSum > 0)
     {
-        InterlockedAdd(_GlobalHistogram[RadixGetPassGlobalBinIndex(binIndex, _RadixParams.passIndex)], blockBinPrefixSum);
+        InterlockedAdd(_GlobalHistogram[RadixGetPassGlobalBinIndex(binIndex, _RadixParams.PassIndex)], blockBinPrefixSum);
     }
 }

@@ -82,7 +82,7 @@ inline uint RadixHistSubBinIndex(uint subIndex, uint binIndex)
 // for _BlockHistogramT
 inline uint RadixHistBinBlockIndex(uint blockIndex, uint binIndex)
 {
-    return binIndex * _RadixParams.blockCount + blockIndex;
+    return binIndex * _RadixParams.BlockCount + blockIndex;
 }
 // for _BlockHistogram
 inline uint RadixHistBlockBinIndex(uint blockIndex, uint binIndex)

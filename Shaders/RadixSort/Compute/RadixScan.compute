@@ -90,12 +90,12 @@ void RadixScan(uint groupIndex : SV_GroupIndex, uint3 groupId : SV_GroupID)
     const uint binIndex = groupId.x; // Each ThreadGroup handles a single Bin across all Blocks
         
     // --- Serial Scan Parameters ---
-    const uint ChunkCount = CeilDiv(_RadixParams.blockCount, GroupSize);
+    const uint ChunkCount = CeilDiv(_RadixParams.BlockCount, GroupSize);
     const uint lastChunkIndex = ChunkCount - 1;
     
     uint blockIndex = groupIndex;
     // globalPrefixSum: Running accumulator across Chunks, initialized with Bin's global starting offset
-    uint globalPrefixSum = _GlobalHistogram[RadixGetPassGlobalBinIndex(binIndex, _RadixParams.passIndex)];
+    uint globalPrefixSum = _GlobalHistogram[RadixGetPassGlobalBinIndex(binIndex, _RadixParams.PassIndex)];
 
     // 1. Process full Chunks (Fast path without boundary checks)
     for (uint chunkIndex = 0; chunkIndex < lastChunkIndex; ++chunkIndex)
@@ -133,7 +133,7 @@ void RadixScan(uint groupIndex : SV_GroupIndex, uint3 groupId : SV_GroupID)
     }
     
     // 2. Final Chunk handling (Boundary check with zero-padding logic)
-    uint blockCount = (blockIndex < _RadixParams.blockCount) ? _BlockHistogramT[RadixHistBinBlockIndex(blockIndex, binIndex)] : 0;
+    uint blockCount = (blockIndex < _RadixParams.BlockCount) ? _BlockHistogramT[RadixHistBinBlockIndex(blockIndex, binIndex)] : 0;
     
     uint blockPrefixSum = WavePrefixSum(blockCount);
     if (laneId == lastLaneId)
@@ -147,7 +147,7 @@ void RadixScan(uint groupIndex : SV_GroupIndex, uint3 groupId : SV_GroupID)
    
     GroupMemoryBarrierWithGroupSync();
     
-    if (blockIndex < _RadixParams.blockCount)
+    if (blockIndex < _RadixParams.BlockCount)
     {
         uint wavePrefixSum = (waveId > 0) ? gs_waveHistogram[waveId - 1] : 0;
         uint totalPrefixSum = globalPrefixSum + blockPrefixSum + wavePrefixSum;

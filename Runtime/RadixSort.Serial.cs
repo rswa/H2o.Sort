@@ -7,7 +7,7 @@ namespace H2o.Sort
 {
   public partial class RadixSort<TEntry> where TEntry : unmanaged, IEntry
   {
-    public class Serial : IRadixSort<TEntry>
+    public sealed class Serial : IRadixSort<TEntry>
     {
       public JobHandle Schedule(RadixSortParams<TEntry> rsParams, out NativeArray<TEntry> sortedEntries)
       {
