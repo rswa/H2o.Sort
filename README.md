@@ -38,7 +38,7 @@ using H2o.Sort;
 var rsParams = new RadixSortParams<Entry>
 {
     MaxKey = 65535,
-    Count = count,
+    EntryCount = _entries.Length,
     Entries = entries,
     TempEntries = tempEntries,
 };
@@ -51,7 +51,7 @@ sorter.Schedule(rsParams, out NativeArray<Entry> sortedEntries).Complete();
 IRadixSort<Entry> sorter = new RadixSort<Entry>.Parallel();
 sorter.Schedule(rsParams, out NativeArray<Entry> sortedEntries).Complete();
 
-// Adaptive (automatically selects Serial or Parallel based on element count)
+// Adaptive (automatically selects Serial or Parallel based on entry count)
 IRadixSort<Entry> sorter = new RadixSort<Entry>();
 sorter.Schedule(rsParams, out NativeArray<Entry> sortedEntries).Complete();
 ```
@@ -64,15 +64,13 @@ using H2o.Sort;
 var sparams = new RadixSortGpuParams
 {
     MaxKey = 65535,
-    EntryCount = (uint)entries.count,
+    EntryCount = (uint)entriesBuffer.count,
     Entries = entriesBuffer,
     TempEntries = tempBuffer,
     EnablePayload = true
 };
 
-commandBuffer.BeginSample("Sort");
 GraphicsBuffer sortedEntries = sort.Dispatch(commandBuffer, sparams);
-commandBuffer.EndSample("Sort");
 
 Graphics.ExecuteCommandBuffer(commandBuffer);
 ```

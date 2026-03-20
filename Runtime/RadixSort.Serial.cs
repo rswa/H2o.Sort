@@ -17,7 +17,7 @@ namespace H2o.Sort
         var job = new RadixSortJob()
         {
           PassCount = passCount,
-          Count = rsParams.Count,
+          Count = rsParams.EntryCount,
           Entries = rsParams.Entries,
           TempEntries = rsParams.TempEntries,
         };

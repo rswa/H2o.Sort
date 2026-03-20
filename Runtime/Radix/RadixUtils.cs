@@ -5,20 +5,24 @@ namespace H2o.Sort
 {
   public static class RadixUtils
   {
+    // Constants in this file must match the definitions in RadixDefinitions.hlsl.
     public const int MaxPasses = 4;
     public const int BitsPerPass = 8;
     public const int BinCount = 1 << BitsPerPass;
     public const uint Mask = BinCount - 1;
-    public const int MinBlockSize = 1024;
-    public const int JobBatchSize = 64; // for Job System innerLoopBatchCount
-    public const uint GlobalBinCount = MaxPasses * BinCount;
-    public const uint KeysPerBlock = BinCount;
+    public const int GlobalBinCount = MaxPasses * BinCount;
 
-    #region sub block version
-    public const uint SubBlockCount = 8; // this is the same RadixSubBlockCount in RadixDefinitions.hlsl
+
+    #region for RadixSortGpu only
+    public const uint SubBlockCount = 8;
     public const uint BlockThreadGroupSize = BinCount;
     public const uint BlockSize = BlockThreadGroupSize * SubBlockCount;
     #endregion
+
+    #region for RadixSort<TEntry> only
+    public const int MinBlockSize = 1024;
+    #endregion
+
     static readonly int[] PassBitShifts =
     {
       0,
@@ -35,17 +39,9 @@ namespace H2o.Sort
       BinCount * 3,
       BinCount * 4
     };
-    public static uint GetBlockCount(uint keyCount)
-    {
-      return CeilDiv(keyCount, KeysPerBlock);
-    }
     public static uint GetBlockHistogramSize(uint blockCount)
     {
       return blockCount * BinCount;
-    }
-    public static uint GetKeyCount(uint blockCount)
-    {
-      return blockCount * KeysPerBlock;
     }
     public static int GetPassCount(uint maxKey)
     {
@@ -74,14 +70,14 @@ namespace H2o.Sort
       return PassGlobalBinOffsets[pass];
     }
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static uint KeyToBinIndex(uint cellId, int pass)
+    public static uint KeyToBinIndex(uint key, int pass)
     {
-      return (cellId >> PassBitShifts[pass]) & Mask;
+      return (key >> PassBitShifts[pass]) & Mask;
     }
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static uint KeyToGlobalBinIndex(uint cellId, int pass)
+    public static uint KeyToGlobalBinIndex(uint key, int pass)
     {
-      return GetPassGlobalBinIndex(KeyToBinIndex(cellId, pass), pass);
+      return GetPassGlobalBinIndex(KeyToBinIndex(key, pass), pass);
     }
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static uint GetGlobalBinCount(int passCount)

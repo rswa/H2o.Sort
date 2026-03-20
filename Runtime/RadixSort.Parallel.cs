@@ -51,8 +51,8 @@ namespace H2o.Sort
       public JobHandle Schedule(RadixSortParams<TEntry> rsParams, out NativeArray<TEntry> sortedEntries)
       {
         int passCount = rsParams.PassCount;
-        int blockSize = GetBlockSize(rsParams.Count);
-        int blockCount = RadixUtils.CeilDiv(rsParams.Count, blockSize);
+        int blockSize = GetBlockSize(rsParams.EntryCount);
+        int blockCount = RadixUtils.CeilDiv(rsParams.EntryCount, blockSize);
 
         sortedEntries = ((passCount & 1) == 0) ? rsParams.Entries : rsParams.TempEntries;
 
@@ -66,7 +66,7 @@ namespace H2o.Sort
           jobHandle = new RadixCountJob()
           {
             OffsetBits = offsetBits,
-            Count = rsParams.Count,
+            Count = rsParams.EntryCount,
             BlockSize = blockSize,
             Entries = srcEntries,
             BlockHistogram = _blockHistogram
@@ -81,7 +81,7 @@ namespace H2o.Sort
           jobHandle = new RadixReorderJob()
           {
             OffsetBits = offsetBits,
-            Count = rsParams.Count,
+            Count = rsParams.EntryCount,
             BlockSize = blockSize,
             BlockHistogram = _blockHistogram,
             Entries = srcEntries,

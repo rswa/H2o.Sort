@@ -12,10 +12,6 @@ namespace H2o.Sort
     static readonly int GlobalHistogramId = Shader.PropertyToID("_GlobalHistogram");
     static readonly int BlockHistogramsId = Shader.PropertyToID("_BlockHistogram");
     static readonly int BlockHistogramsTId = Shader.PropertyToID("_BlockHistogramT");
-    static readonly int KeysId = Shader.PropertyToID("_Keys");
-    static readonly int PayloadsId = Shader.PropertyToID("_Payloads");
-    static readonly int SortedPayloadsId = Shader.PropertyToID("_SortedPayloads");
-    static readonly int SortedKeysId = Shader.PropertyToID("_SortedKeys");
     static readonly int EntriesId = Shader.PropertyToID("_Entries");
     static readonly int SortedEntriesId = Shader.PropertyToID("_SortedEntries");
 
@@ -30,7 +26,7 @@ namespace H2o.Sort
     private LocalKeyword _reorderEnablePayload;
 
     private bool _disposed = false;
-    private uint _maxKeyCapacity;
+    private uint _maxEntryCapacity;
 
     private GraphicsBuffer _globalHistogram; // exclusive prefix sum
     private GraphicsBuffer _blockHistogram; // exclusive prefix sum
@@ -43,8 +39,8 @@ namespace H2o.Sort
     public GraphicsBuffer GlobalHistogram => _globalHistogram;
     public GraphicsBuffer BlockHistogram => _blockHistogram;
     public GraphicsBuffer BlockHistogramT => _blockHistogramT;
-    public uint MaxKeyCount => _maxKeyCapacity;
-    public RadixSortGpu(uint keyCapacity, RadixSortGpuSettings settings)
+    public uint MaxEntryCount => _maxEntryCapacity;
+    public RadixSortGpu(uint entryCapacity, RadixSortGpuSettings settings)
     {
       settings.AssertVald();
 
@@ -55,19 +51,19 @@ namespace H2o.Sort
       _countEnablePayload = new LocalKeyword(_radixCount, "ENABLE_PAYLOAD");
       _reorderEnablePayload = new LocalKeyword(_radixReorder, "ENABLE_PAYLOAD");
 
-      _globalHistogram = new GraphicsBuffer(GraphicsBuffer.Target.Structured, (int)RadixUtils.GlobalBinCount, sizeof(uint));
+      _globalHistogram = new GraphicsBuffer(GraphicsBuffer.Target.Structured, RadixUtils.GlobalBinCount, sizeof(uint));
 
       FetchKernelIds();
 
       _radixScan.GetKernelThreadGroupSizes(_kernelScan, out uint groupSize, out _, out _);
       // _BlockHistogram must be aligned to groupSize
-      uint blockCount = GetBlockCount(keyCapacity);
+      uint blockCount = GetBlockCount(entryCapacity);
       uint maxBlockCapacity = RadixUtils.CeilDiv(blockCount, groupSize) * groupSize;
       uint blockHistogramSize = RadixUtils.GetBlockHistogramSize(maxBlockCapacity);
       _blockHistogram = new GraphicsBuffer(GraphicsBuffer.Target.Structured, (int)blockHistogramSize, sizeof(uint));
       _blockHistogramT = new GraphicsBuffer(GraphicsBuffer.Target.Structured, (int)blockHistogramSize, sizeof(uint));
       _radixParams = new ConstantBuffer<RadixParams>();
-      _maxKeyCapacity = GetKeyCount(maxBlockCapacity);
+      _maxEntryCapacity = GetKeyCount(maxBlockCapacity);
     }
     ~RadixSortGpu()
     {
@@ -116,7 +112,7 @@ namespace H2o.Sort
     {
       rsParams.AssertValid();
       Assert.IsNotNull(cmd, $"{nameof(Dispatch)}: {nameof(cmd)} is null");
-      Assert.IsTrue(_maxKeyCapacity >= rsParams.EntryCount, $"{nameof(_maxKeyCapacity)}({_maxKeyCapacity}) < {nameof(rsParams)}.{nameof(rsParams.EntryCount)}({rsParams.EntryCount})");
+      Assert.IsTrue(_maxEntryCapacity >= rsParams.EntryCount, $"{nameof(_maxEntryCapacity)}({_maxEntryCapacity}) < {nameof(rsParams)}.{nameof(rsParams.EntryCount)}({rsParams.EntryCount})");
 
       int passCount = RadixUtils.GetPassCount(rsParams.MaxKey);
       uint globalBinCount = RadixUtils.GetGlobalBinCount(passCount);

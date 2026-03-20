@@ -1,6 +1,7 @@
 #ifndef RADIX_DEFINITIONS_HLSL
 #define RADIX_DEFINITIONS_HLSL
 
+// Constants in this file must match the definitions in RadixUtils.cs.
 
 static const uint RadixMaxPasses = 4;
 static const uint RadixBitsPerPass = 8;

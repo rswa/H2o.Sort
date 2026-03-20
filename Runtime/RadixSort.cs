@@ -20,7 +20,7 @@ namespace H2o.Sort
     where TEntry : unmanaged, IEntry
   {
     public uint MaxKey;
-    public int Count;
+    public int EntryCount;
     public NativeArray<TEntry> Entries;
     public NativeArray<TEntry> TempEntries;
     public JobHandle Dependency;
@@ -68,7 +68,7 @@ namespace H2o.Sort
     }
     public JobHandle Schedule(RadixSortParams<TEntry> rsParams, out NativeArray<TEntry> sortedEntries)
     {
-      if (rsParams.Count < _parallelThreshold)
+      if (rsParams.EntryCount < _parallelThreshold)
       {
         return _serial.Schedule(rsParams, out sortedEntries);
       }

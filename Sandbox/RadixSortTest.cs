@@ -64,7 +64,7 @@ namespace H2o.Sort.Sandbox
       RadixSortParams<Entry> rsParams = new RadixSortParams<Entry>()
       {
         MaxKey = MaxKey,
-        Count = Count,
+        EntryCount = _entries.Length,
         Entries = _entries,
         TempEntries = _tempEntries,
       };
