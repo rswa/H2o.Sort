@@ -21,6 +21,7 @@ namespace H2o.Sort
 
     #region for RadixSort<TEntry> only
     public const int MinBlockSize = 1024;
+    public const int BlocksPerWorker = 4;
     #endregion
 
     static readonly int[] PassBitShifts =

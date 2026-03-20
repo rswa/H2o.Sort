@@ -17,7 +17,7 @@ namespace H2o.Sort
       private bool _disposed = false;
       public Parallel()
       {
-        _maxBlockCount = (JobsUtility.JobWorkerCount + 1) * 4;
+        _maxBlockCount = (JobsUtility.JobWorkerCount + 1) * RadixUtils.BlocksPerWorker;
         _blockHistogram = new NativeArray<int>(_maxBlockCount * RadixUtils.BinCount, Allocator.Persistent);
       }
       ~Parallel()
@@ -62,11 +62,11 @@ namespace H2o.Sort
         JobHandle jobHandle = rsParams.Dependency;
         for (int passIndex = 0; passIndex < passCount; ++passIndex)
         {
-          int offsetBits = passIndex * RadixUtils.BitsPerPass;
+          int passBitsShift = passIndex * RadixUtils.BitsPerPass;
           jobHandle = new RadixCountJob()
           {
-            OffsetBits = offsetBits,
-            Count = rsParams.EntryCount,
+            PassBitsShift = passBitsShift,
+            EntryCount = rsParams.EntryCount,
             BlockSize = blockSize,
             Entries = srcEntries,
             BlockHistogram = _blockHistogram
@@ -80,8 +80,8 @@ namespace H2o.Sort
 
           jobHandle = new RadixReorderJob()
           {
-            OffsetBits = offsetBits,
-            Count = rsParams.EntryCount,
+            PassBitsShift = passBitsShift,
+            EntryCount = rsParams.EntryCount,
             BlockSize = blockSize,
             BlockHistogram = _blockHistogram,
             Entries = srcEntries,
@@ -94,8 +94,8 @@ namespace H2o.Sort
       [BurstCompile]
       public struct RadixCountJob : IJobFor
       {
-        public int OffsetBits;
-        public int Count;
+        public int PassBitsShift;
+        public int EntryCount;
         public int BlockSize;
         [ReadOnly] public NativeArray<TEntry> Entries;
         [NativeDisableParallelForRestriction]
@@ -103,12 +103,12 @@ namespace H2o.Sort
         public void Execute(int blockIndex)
         {
           Span<int> histogram = stackalloc int[RadixUtils.BinCount];
-          int keyBlockStart = blockIndex * BlockSize;
-          int keyBlockEnd = math.min(keyBlockStart + BlockSize, Count);
-          for (int i = keyBlockStart; i < keyBlockEnd; i++)
+          int entryBlockStart = blockIndex * BlockSize;
+          int entryBlockEnd = math.min(entryBlockStart + BlockSize, EntryCount);
+          for (int i = entryBlockStart; i < entryBlockEnd; i++)
           {
             uint val = Entries[i].Key;
-            int index = (int)((val >> OffsetBits) & RadixUtils.Mask);
+            int index = (int)((val >> PassBitsShift) & RadixUtils.Mask);
             histogram[index]++;
           }
 
@@ -139,8 +139,8 @@ namespace H2o.Sort
       [BurstCompile]
       public struct RadixReorderJob : IJobFor
       {
-        public int OffsetBits;
-        public int Count;
+        public int PassBitsShift;
+        public int EntryCount;
         public int BlockSize;
 
         [ReadOnly] public NativeArray<TEntry> Entries;
@@ -154,14 +154,14 @@ namespace H2o.Sort
         public void Execute(int blockIndex)
         {
           int blockHistogramStart = blockIndex * RadixUtils.BinCount;
-          int keyBlockStart = blockIndex * BlockSize;
-          int keyBlockEnd = math.min(keyBlockStart + BlockSize, Count);
+          int entryBlockStart = blockIndex * BlockSize;
+          int entryBlockEnd = math.min(entryBlockStart + BlockSize, EntryCount);
 
-          for (int i = keyBlockStart; i < keyBlockEnd; i++)
+          for (int i = entryBlockStart; i < entryBlockEnd; i++)
           {
             TEntry entry = Entries[i];
             uint key = entry.Key;
-            int bin = (int)((key >> OffsetBits) & RadixUtils.Mask);
+            int bin = (int)((key >> PassBitsShift) & RadixUtils.Mask);
             int counterIndex = blockHistogramStart + bin;
             int targetIndex = BlockHistogram[counterIndex];
             SortedEntries[targetIndex] = entry;

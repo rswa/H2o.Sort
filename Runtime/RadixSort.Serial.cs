@@ -17,7 +17,7 @@ namespace H2o.Sort
         var job = new RadixSortJob()
         {
           PassCount = passCount,
-          Count = rsParams.EntryCount,
+          EntryCount = rsParams.EntryCount,
           Entries = rsParams.Entries,
           TempEntries = rsParams.TempEntries,
         };
@@ -27,7 +27,7 @@ namespace H2o.Sort
       public struct RadixSortJob : IJob
       {
         public int PassCount;
-        public int Count;
+        public int EntryCount;
         [NoAlias] public NativeArray<TEntry> Entries;
         [NoAlias] public NativeArray<TEntry> TempEntries;
         public void Execute()
@@ -37,14 +37,14 @@ namespace H2o.Sort
           switch (PassCount)
           {
             case 1:
-              for (int i = 0; i < Count; i++)
+              for (int i = 0; i < EntryCount; i++)
               {
                 uint val = Entries[i].Key;
                 histogram[0 * RadixUtils.BinCount + (int)(val & RadixUtils.Mask)]++;
               }
               break;
             case 2:
-              for (int i = 0; i < Count; i++)
+              for (int i = 0; i < EntryCount; i++)
               {
                 uint val = Entries[i].Key;
                 histogram[(int)RadixUtils.KeyToGlobalBinIndex(val, 0)]++;
@@ -52,7 +52,7 @@ namespace H2o.Sort
               }
               break;
             case 3:
-              for (int i = 0; i < Count; i++)
+              for (int i = 0; i < EntryCount; i++)
               {
                 uint val = Entries[i].Key;
                 histogram[(int)RadixUtils.KeyToGlobalBinIndex(val, 0)]++;
@@ -61,7 +61,7 @@ namespace H2o.Sort
               }
               break;
             case 4:
-              for (int i = 0; i < Count; i++)
+              for (int i = 0; i < EntryCount; i++)
               {
                 uint val = Entries[i].Key;
                 histogram[(int)RadixUtils.KeyToGlobalBinIndex(val, 0)]++;
@@ -78,7 +78,7 @@ namespace H2o.Sort
           for (int pass = 0; pass < PassCount; pass++)
           {
             int passOffset = pass * RadixUtils.BinCount;
-            int currentBitsShift = pass * RadixUtils.BitsPerPass;
+            int passBitsShift = pass * RadixUtils.BitsPerPass;
             int sum = 0;
             for (int i = 0; i < RadixUtils.BinCount; i++)
             {
@@ -87,10 +87,10 @@ namespace H2o.Sort
               sum += count;
             }
 
-            for (int i = 0; i < Count; i++)
+            for (int i = 0; i < EntryCount; i++)
             {
               uint val = srcEntries[i].Key;
-              int byteVal = (int)((val >> currentBitsShift) & RadixUtils.Mask);
+              int byteVal = (int)((val >> passBitsShift) & RadixUtils.Mask);
               int targetIndex = histogram[passOffset + byteVal]++;
               dstEntries[targetIndex] = srcEntries[i];
             }
