@@ -110,7 +110,6 @@ namespace H2o.Sort
     /// Executes the GPU Radix Sort.
     /// </summary>
     /// <returns>
-    /// The <see cref="EntryGraphicsBuffers"/> containing the final sorted result.
     /// <para>Note: Due to ping-pong swapping, this may be either the input Entries or TempEntries.</para>
     /// </returns>
     public GraphicsBuffer Dispatch(CommandBuffer cmd, RadixSortGpuParams rsParams)
