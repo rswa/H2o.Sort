@@ -7,63 +7,46 @@ namespace H2o.Sort
 {
   public sealed class RadixSortGpu : System.IDisposable
   {
-    // buffers
-    static readonly int RadixParamsId = Shader.PropertyToID("_RadixParams");
-    static readonly int GlobalHistogramId = Shader.PropertyToID("_GlobalHistogram");
-    static readonly int BlockHistogramsId = Shader.PropertyToID("_BlockHistogram");
-    static readonly int BlockHistogramsTId = Shader.PropertyToID("_BlockHistogramT");
-    static readonly int EntriesId = Shader.PropertyToID("_Entries");
-    static readonly int SortedEntriesId = Shader.PropertyToID("_SortedEntries");
-
-
-    private int _kernelClearGlobalHistogram = -1;
-    private int _kernelCount = -1;
-    private int _kernelScan = -1;
-    private int _kernelReorder = -1;
-
-
-    private LocalKeyword _countEnablePayload;
-    private LocalKeyword _reorderEnablePayload;
-
     private bool _disposed = false;
-    private uint _maxEntryCapacity;
+    private uint _entryCapacity;
 
     private GraphicsBuffer _globalHistogram; // exclusive prefix sum
     private GraphicsBuffer _blockHistogram; // exclusive prefix sum
     private GraphicsBuffer _blockHistogramT; // count
     private ConstantBuffer<RadixParams> _radixParams;
-    private ComputeShader _radixCount;
-    private ComputeShader _radixScan;
-    private ComputeShader _radixReorder;
 
+    private ComputeShader _countShader;
+    private ComputeShader _scanShader;
+    private ComputeShader _reorderShader;
+
+    private Kernels _kernels;
+    private LocalKeywords _localKeywords;
     public GraphicsBuffer GlobalHistogram => _globalHistogram;
     public GraphicsBuffer BlockHistogram => _blockHistogram;
     public GraphicsBuffer BlockHistogramT => _blockHistogramT;
-    public uint MaxEntryCount => _maxEntryCapacity;
+    public uint EntryCapcaity => _entryCapacity;
     public RadixSortGpu(uint entryCapacity, RadixSortGpuSettings settings)
     {
       settings.AssertVald();
 
-      _radixCount = settings.RadixCount;
-      _radixScan = settings.RadixScan;
-      _radixReorder = settings.RadixReorder;
+      _countShader = settings.RadixCount;
+      _scanShader = settings.RadixScan;
+      _reorderShader = settings.RadixReorder;
 
-      _countEnablePayload = new LocalKeyword(_radixCount, "ENABLE_PAYLOAD");
-      _reorderEnablePayload = new LocalKeyword(_radixReorder, "ENABLE_PAYLOAD");
+      _kernels = new Kernels(_countShader, _scanShader, _reorderShader);
+      _localKeywords = new LocalKeywords(_countShader, _scanShader, _reorderShader);
 
-      _globalHistogram = new GraphicsBuffer(GraphicsBuffer.Target.Structured, RadixUtils.GlobalBinCount, sizeof(uint));
-
-      FetchKernelIds();
-
-      _radixScan.GetKernelThreadGroupSizes(_kernelScan, out uint groupSize, out _, out _);
+      _scanShader.GetKernelThreadGroupSizes(_kernels.RadixScan, out uint groupSize, out _, out _);
       // _BlockHistogram must be aligned to groupSize
-      uint blockCount = GetBlockCount(entryCapacity);
+      uint blockCount = RadixUtils.GetGpuBlockCount(entryCapacity);
       uint maxBlockCapacity = RadixUtils.CeilDiv(blockCount, groupSize) * groupSize;
       uint blockHistogramSize = RadixUtils.GetBlockHistogramSize(maxBlockCapacity);
+      _entryCapacity = RadixUtils.GetGpuEntryCount(maxBlockCapacity);
+
       _blockHistogram = new GraphicsBuffer(GraphicsBuffer.Target.Structured, (int)blockHistogramSize, sizeof(uint));
       _blockHistogramT = new GraphicsBuffer(GraphicsBuffer.Target.Structured, (int)blockHistogramSize, sizeof(uint));
       _radixParams = new ConstantBuffer<RadixParams>();
-      _maxEntryCapacity = GetKeyCount(maxBlockCapacity);
+      _globalHistogram = new GraphicsBuffer(GraphicsBuffer.Target.Structured, RadixUtils.GlobalBinCount, sizeof(uint));
     }
     ~RadixSortGpu()
     {
@@ -94,14 +77,6 @@ namespace H2o.Sort
 
       _disposed = true;
     }
-    uint GetBlockCount(uint keyCount)
-    {
-      return RadixUtils.CeilDiv(keyCount, RadixUtils.BlockSize);
-    }
-    uint GetKeyCount(uint blockCount)
-    {
-      return blockCount * RadixUtils.BlockSize;
-    }
     /// <summary>
     /// Executes the GPU Radix Sort.
     /// </summary>
@@ -112,33 +87,33 @@ namespace H2o.Sort
     {
       rsParams.AssertValid();
       Assert.IsNotNull(cmd, $"{nameof(Dispatch)}: {nameof(cmd)} is null");
-      Assert.IsTrue(_maxEntryCapacity >= rsParams.EntryCount, $"{nameof(_maxEntryCapacity)}({_maxEntryCapacity}) < {nameof(rsParams)}.{nameof(rsParams.EntryCount)}({rsParams.EntryCount})");
+      Assert.IsTrue(_entryCapacity >= rsParams.EntryCount, $"{nameof(_entryCapacity)}({_entryCapacity}) < {nameof(rsParams)}.{nameof(rsParams.EntryCount)}({rsParams.EntryCount})");
 
       int passCount = RadixUtils.GetPassCount(rsParams.MaxKey);
       uint globalBinCount = RadixUtils.GetGlobalBinCount(passCount);
-      uint blockCount = GetBlockCount(rsParams.EntryCount);
+      uint blockCount = RadixUtils.GetGpuBlockCount(rsParams.EntryCount);
 
-      cmd.SetKeyword(_radixCount, _countEnablePayload, rsParams.EnablePayload);
-      cmd.SetKeyword(_radixReorder, _reorderEnablePayload, rsParams.EnablePayload);
+      cmd.SetKeyword(_countShader, _localKeywords.CountEnablePayload, rsParams.EnablePayload);
+      cmd.SetKeyword(_reorderShader, _localKeywords.ReorderEnablePayload, rsParams.EnablePayload);
 
-      cmd.SetComputeBufferParam(_radixCount, _kernelClearGlobalHistogram, GlobalHistogramId, _globalHistogram);
-      ComputeHelpers.Dispatch(cmd, _radixCount, _kernelClearGlobalHistogram, globalBinCount);
-
-
-      cmd.SetComputeBufferParam(_radixCount, _kernelCount, GlobalHistogramId, _globalHistogram);
-      cmd.SetComputeBufferParam(_radixCount, _kernelCount, BlockHistogramsTId, _blockHistogramT);
+      cmd.SetComputeBufferParam(_countShader, _kernels.RadixClearGlobalHistogram, ShaderIds._GlobalHistogram, _globalHistogram);
+      ComputeHelpers.Dispatch(cmd, _countShader, _kernels.RadixClearGlobalHistogram, globalBinCount);
 
 
-      cmd.SetComputeBufferParam(_radixScan, _kernelScan, GlobalHistogramId, _globalHistogram);
-      cmd.SetComputeBufferParam(_radixScan, _kernelScan, BlockHistogramsTId, _blockHistogramT);
-      cmd.SetComputeBufferParam(_radixScan, _kernelScan, BlockHistogramsId, _blockHistogram);
+      cmd.SetComputeBufferParam(_countShader, _kernels.RadixCount, ShaderIds._GlobalHistogram, _globalHistogram);
+      cmd.SetComputeBufferParam(_countShader, _kernels.RadixCount, ShaderIds._BlockHistogramT, _blockHistogramT);
 
 
-      cmd.SetComputeBufferParam(_radixReorder, _kernelReorder, BlockHistogramsId, _blockHistogram);
+      cmd.SetComputeBufferParam(_scanShader, _kernels.RadixScan, ShaderIds._GlobalHistogram, _globalHistogram);
+      cmd.SetComputeBufferParam(_scanShader, _kernels.RadixScan, ShaderIds._BlockHistogramT, _blockHistogramT);
+      cmd.SetComputeBufferParam(_scanShader, _kernels.RadixScan, ShaderIds._BlockHistogram, _blockHistogram);
 
-      _radixParams.Set(cmd, _radixCount, RadixParamsId);
-      _radixParams.Set(cmd, _radixScan, RadixParamsId);
-      _radixParams.Set(cmd, _radixReorder, RadixParamsId);
+
+      cmd.SetComputeBufferParam(_reorderShader, _kernels.RadixReorder, ShaderIds._BlockHistogram, _blockHistogram);
+
+      _radixParams.Set(cmd, _countShader, ShaderIds._RadixParams);
+      _radixParams.Set(cmd, _scanShader, ShaderIds._RadixParams);
+      _radixParams.Set(cmd, _reorderShader, ShaderIds._RadixParams);
 
 
       RadixParams radixParams = new RadixParams
@@ -147,39 +122,65 @@ namespace H2o.Sort
         BlockCount = blockCount
       };
 
-      GraphicsBuffer source = rsParams.Entries;
-      GraphicsBuffer destination = rsParams.TempEntries;
+      GraphicsBuffer entities = rsParams.Entries;
+      GraphicsBuffer tempEntities = rsParams.TempEntries;
       for (uint passIndex = 0; passIndex < passCount; ++passIndex)
       {
         radixParams.PassIndex = passIndex;
         _radixParams.UpdateData(cmd, radixParams);
 
-        cmd.SetComputeBufferParam(_radixCount, _kernelCount, EntriesId, source);
+        cmd.SetComputeBufferParam(_countShader, _kernels.RadixCount, ShaderIds._Entries, entities);
 
-        cmd.SetComputeBufferParam(_radixReorder, _kernelReorder, EntriesId, source);
-        cmd.SetComputeBufferParam(_radixReorder, _kernelReorder, SortedEntriesId, destination);
+        cmd.SetComputeBufferParam(_reorderShader, _kernels.RadixReorder, ShaderIds._Entries, entities);
+        cmd.SetComputeBufferParam(_reorderShader, _kernels.RadixReorder, ShaderIds._SortedEntries, tempEntities);
 
-        cmd.BeginSample("RadixCount");
-        cmd.DispatchCompute(_radixCount, _kernelCount, (int)blockCount, 1, 1);
-        cmd.EndSample("RadixCount");
+        cmd.BeginSample(nameof(_kernels.RadixCount));
+        cmd.DispatchCompute(_countShader, _kernels.RadixCount, (int)blockCount, 1, 1);
+        cmd.EndSample(nameof(_kernels.RadixCount));
 
-        cmd.BeginSample("RadixScan");
-        cmd.DispatchCompute(_radixScan, _kernelScan, RadixUtils.BinCount, 1, 1);
-        cmd.EndSample("RadixScan");
+        cmd.BeginSample(nameof(_kernels.RadixScan));
+        cmd.DispatchCompute(_scanShader, _kernels.RadixScan, RadixUtils.BinCount, 1, 1);
+        cmd.EndSample(nameof(_kernels.RadixScan));
 
-        cmd.BeginSample("RadixReorder");
-        cmd.DispatchCompute(_radixReorder, _kernelReorder, (int)blockCount, 1, 1);
-        cmd.EndSample("RadixReorder");
-        (source, destination) = (destination, source);
+        cmd.BeginSample(nameof(_kernels.RadixReorder));
+        cmd.DispatchCompute(_reorderShader, _kernels.RadixReorder, (int)blockCount, 1, 1);
+        cmd.EndSample(nameof(_kernels.RadixReorder));
+        (entities, tempEntities) = (tempEntities, entities);
       }
-      return source;
+      return entities;
     }
-    void FetchKernelIds()
+    static class ShaderIds
     {
-      _kernelClearGlobalHistogram = _radixCount.FindKernel("RadixClearGlobalHistogram");
-      _kernelCount = _radixCount.FindKernel("RadixCount");
-      _kernelScan = _radixScan.FindKernel("RadixScan");
-      _kernelReorder = _radixReorder.FindKernel("RadixReorder");
+      public static readonly int _RadixParams = Shader.PropertyToID(nameof(_RadixParams));
+      public static readonly int _GlobalHistogram = Shader.PropertyToID(nameof(_GlobalHistogram));
+      public static readonly int _BlockHistogram = Shader.PropertyToID(nameof(_BlockHistogram));
+      public static readonly int _BlockHistogramT = Shader.PropertyToID(nameof(_BlockHistogramT));
+      public static readonly int _Entries = Shader.PropertyToID(nameof(_Entries));
+      public static readonly int _SortedEntries = Shader.PropertyToID(nameof(_SortedEntries));
+    }
+    struct Kernels
+    {
+      public readonly int RadixClearGlobalHistogram;
+      public readonly int RadixCount;
+      public readonly int RadixScan;
+      public readonly int RadixReorder;
+      public Kernels(ComputeShader countShader, ComputeShader scanShader, ComputeShader reorderShader)
+      {
+        RadixClearGlobalHistogram = countShader.FindKernel(nameof(RadixClearGlobalHistogram));
+        RadixCount = countShader.FindKernel(nameof(RadixCount));
+        RadixScan = scanShader.FindKernel(nameof(RadixScan));
+        RadixReorder = reorderShader.FindKernel(nameof(RadixReorder));
+      }
+    }
+    struct LocalKeywords
+    {
+      public readonly LocalKeyword CountEnablePayload;
+      public readonly LocalKeyword ReorderEnablePayload;
+      public LocalKeywords(ComputeShader countShader, ComputeShader scanShader, ComputeShader reorderShader)
+      {
+        CountEnablePayload = new LocalKeyword(countShader, "ENABLE_PAYLOAD");
+        ReorderEnablePayload = new LocalKeyword(reorderShader, "ENABLE_PAYLOAD");
+      }
     }
     // --- std140 Layout Alignment Rules ---
     // 1. Scalar (int, float, uint, bool): 

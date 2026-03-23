@@ -85,5 +85,18 @@ namespace H2o.Sort
     {
       return PassGlobalBinOffsets[passCount];
     }
+    #region for RadixSortGpu only
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static uint GetGpuBlockCount(uint keyCount)
+    {
+      return CeilDiv(keyCount, BlockSize);
+    }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static uint GetGpuEntryCount(uint blockCount)
+    {
+      return blockCount * BlockSize;
+    }
+    #endregion
   }
 }
