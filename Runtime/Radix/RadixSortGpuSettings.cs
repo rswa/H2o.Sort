@@ -16,11 +16,11 @@ namespace H2o.Sort
     public ComputeShader RadixReorder => _radixReorder;
 
     [System.Diagnostics.Conditional("UNITY_ASSERTIONS")]
-    public void AssertVald()
+    public void AssertValid()
     {
-      Assert.IsNotNull(_radixCount, $"{nameof(_radixCount)} is null");
-      Assert.IsNotNull(_radixScan, $"{nameof(_radixScan)} is null");
-      Assert.IsNotNull(_radixReorder, $"{nameof(_radixReorder)} is null");
+      Assert.IsNotNull(_radixCount, $"[{nameof(RadixSortGpuSettings)}] {nameof(_radixCount)} is null.");
+      Assert.IsNotNull(_radixScan, $"[{nameof(RadixSortGpuSettings)}] {nameof(_radixScan)} is null.");
+      Assert.IsNotNull(_radixReorder, $"[{nameof(RadixSortGpuSettings)}] {nameof(_radixReorder)} is null.");
     }
   }
 }

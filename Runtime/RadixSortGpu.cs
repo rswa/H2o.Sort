@@ -27,7 +27,7 @@ namespace H2o.Sort
     public uint EntryCapcaity => _entryCapacity;
     public RadixSortGpu(uint entryCapacity, RadixSortGpuSettings settings)
     {
-      settings.AssertVald();
+      settings.AssertValid();
 
       _countShader = settings.RadixCount;
       _scanShader = settings.RadixScan;
@@ -86,7 +86,7 @@ namespace H2o.Sort
     public GraphicsBuffer Dispatch(CommandBuffer cmd, RadixSortGpuParams rsParams)
     {
       rsParams.AssertValid();
-      Assert.IsNotNull(cmd, $"{nameof(Dispatch)}: {nameof(cmd)} is null");
+      Assert.IsNotNull(cmd, $"[{nameof(RadixSortGpu)}.{nameof(Dispatch)}] {nameof(cmd)} is null.");
       Assert.IsTrue(_entryCapacity >= rsParams.EntryCount, $"{nameof(_entryCapacity)}({_entryCapacity}) < {nameof(rsParams)}.{nameof(rsParams.EntryCount)}({rsParams.EntryCount})");
 
       int passCount = RadixUtils.GetPassCount(rsParams.MaxKey);
